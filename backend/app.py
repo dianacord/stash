@@ -34,23 +34,23 @@ def root():
 # Main entry point
 if __name__ == '__main__':
     print("\n" + "="*50)
-    print("🚀 Starting Stash API...")
+    print(" Starting Stash API...")
     print("="*50)
     
     # Check if API keys are configured
     if os.getenv('SUPABASE_URL'):
-        print(f"✅ Supabase: {os.getenv('SUPABASE_URL')[:30]}...")
+        print(f" Supabase: {os.getenv('SUPABASE_URL')[:30]}...")
     else:
-        print("❌ Supabase: Not configured")
+        print(" Supabase: Not configured")
     
-    if os.getenv('GROQ_API_KEY'):
-        print("✅ Groq API: Configured")
+    if os.getenv(' GROQ_API_KEY'):
+        print(" Groq API: Configured")
     else:
-        print("❌ Groq API: Not configured")
+        print(" Groq API: Not configured")
     
     print("="*50)
-    print("📍 Server running at: http://localhost:8080")
-    print("📍 Health check: http://localhost:8080/api/health")
+    print(" Server running at: http://localhost:8080")
+    print(" Health check: http://localhost:8080/api/health")
     print("="*50 + "\n")
     
     app.run(debug=True, port=8080)
