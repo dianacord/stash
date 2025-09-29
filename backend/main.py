@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from backend.services.youtube_fetcher import WorkingYouTubeFetcher
+from backend.services.youtube_fetcher import YouTubeFetcher
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -10,7 +10,7 @@ app = FastAPI(
 )
 
 # Initialize YouTube fetcher
-youtube_fetcher = WorkingYouTubeFetcher()
+youtube_fetcher = YouTubeFetcher()
 
 # Pydantic models for request/response validation
 class VideoRequest(BaseModel):
