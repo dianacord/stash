@@ -19,5 +19,5 @@ Save and organize content from videos (YouTube, TikTok) with AI-powered summarie
 
 1. Clone repository
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/dianacord/stash
 cd stash
