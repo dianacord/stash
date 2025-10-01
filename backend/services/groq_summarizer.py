@@ -10,7 +10,7 @@ class GroqSummarizer:
             raise ValueError("GROQ_API_KEY not found in environment variables")
         self.client = Groq(api_key=api_key)
     
-    def summarize(self, transcript: str, max_length: int = 4000) -> dict:
+    def summarize(self, transcript: str, max_length: int = 12000) -> dict:
         """
         Generate adaptive notes from a video transcript.
         
