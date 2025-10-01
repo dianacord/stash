@@ -6,7 +6,6 @@ class YouTubeFetcher:
     
     def __init__(self):
         self.api = YouTubeTranscriptApi()
-        print(f"DEBUG: Available methods: {[m for m in dir(self.api) if not m.startswith('_')]}")
     
     def extract_video_id(self, url: str) -> str:
         """Extract video ID from YouTube URL"""

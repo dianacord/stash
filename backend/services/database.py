@@ -45,13 +45,14 @@ class DatabaseService:
             
             cursor.execute('''
                 INSERT INTO saved_videos 
-                (url, video_id, platform, raw_transcript, language, is_generated, segments_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (url, video_id, platform, raw_transcript, ai_summary, language, is_generated, segments_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 video_data['url'],
                 video_data['video_id'],
                 video_data.get('platform', 'youtube'),
                 video_data['raw_transcript'],
+                video_data.get('ai_summary'),
                 video_data.get('language'),
                 video_data.get('is_generated'),
                 video_data.get('segments_count')

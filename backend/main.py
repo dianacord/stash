@@ -2,12 +2,24 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from backend.services.youtube_fetcher import YouTubeFetcher
 from backend.services.database import DatabaseService
+from backend.services.groq_summarizer import GroqSummarizer
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(title="Stash API", description="Video Content Organizer")
 
 # Initialize services
 youtube_fetcher = YouTubeFetcher()
 db_service = DatabaseService()
+
+try:
+    groq_summarizer = GroqSummarizer()
+    summarizer_available = True
+except Exception as e:
+    print(f"Warning: GroqSummarizer not available: {e}")
+    groq_summarizer = None
+    summarizer_available = False
 
 class VideoRequest(BaseModel):
     url: str
@@ -28,12 +40,28 @@ def save_video_transcript(request: VideoRequest):
         
         if not transcript_result['success']:
             raise HTTPException(status_code=400, detail=transcript_result['error'])
+
+        # Summarize transcript
+        ai_summary = None
+        if summarizer_available and groq_summarizer:
+            print(f"DEBUG: Attempting to summarize transcript ({len(transcript_result['transcript'])} chars)")
+            summary_result = groq_summarizer.summarize(transcript_result['transcript'])
+            print(f"DEBUG: Summary result: {summary_result}")
+            if summary_result['success']:
+                ai_summary = summary_result['summary']
+                print(f"DEBUG: Summary generated successfully: {ai_summary[:100]}...")
+            else:
+                print(f"Warning: Failed to generate summary - {summary_result.get('error')}")
+        else:
+            print(f"DEBUG: Summarizer not available. summarizer_available={summarizer_available}, groq_summarizer={groq_summarizer}")
+
         
         # Prepare data for database
         video_data = {
             'url': request.url,
             'video_id': transcript_result['video_id'],
             'raw_transcript': transcript_result['transcript'],
+            'ai_summary': ai_summary,
             'language': transcript_result.get('language'),
             'is_generated': transcript_result.get('is_generated'),
             'segments_count': transcript_result['segments_count'],
@@ -79,4 +107,4 @@ def get_video(video_id: str):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "healthy", "service": "stash-api"}
+    return {"status": "healthy", "service": "stash-api", "groq_summarizer": summarizer_available}
