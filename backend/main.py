@@ -4,10 +4,19 @@ from backend.services.youtube_fetcher import YouTubeFetcher
 from backend.services.database import DatabaseService
 from backend.services.groq_summarizer import GroqSummarizer
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI(title="Stash API", description="Video Content Organizer")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize services
 youtube_fetcher = YouTubeFetcher()
@@ -44,16 +53,11 @@ def save_video_transcript(request: VideoRequest):
         # Summarize transcript
         ai_summary = None
         if summarizer_available and groq_summarizer:
-            print(f"DEBUG: Attempting to summarize transcript ({len(transcript_result['transcript'])} chars)")
             summary_result = groq_summarizer.summarize(transcript_result['transcript'])
-            print(f"DEBUG: Summary result: {summary_result}")
             if summary_result['success']:
                 ai_summary = summary_result['summary']
-                print(f"DEBUG: Summary generated successfully: {ai_summary[:100]}...")
             else:
                 print(f"Warning: Failed to generate summary - {summary_result.get('error')}")
-        else:
-            print(f"DEBUG: Summarizer not available. summarizer_available={summarizer_available}, groq_summarizer={groq_summarizer}")
 
         
         # Prepare data for database
