@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stash - Turn Videos into Notes</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-white">
+    <!-- Hero Section -->
+    <div class="min-h-screen">
+        <!-- Navigation -->
+        <nav class="border-b border-gray-200">
+            <div class="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+                        <span class="text-white font-bold">S</span>
+                    </div>
+                    <span class="text-xl font-bold text-gray-900">Stash</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Hero Content -->
+        <div class="max-w-4xl mx-auto px-6 pt-24 pb-16 text-center">
+            <h1 class="text-7xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 mb-6 leading-tight">
+                Stash
+            </h1>
+            
+            <p class="text-2xl md:text-3xl text-gray-700 font-medium mb-12">
+                Turn YouTube videos into organized, searchable notes
+            </p>
+
+            <!-- Search Box -->
+            <div class="max-w-2xl mx-auto">
+                <form id="addVideoForm" class="relative">
+                    <input 
+                        type="text" 
+                        id="videoUrl" 
+                        placeholder="Paste any YouTube URL here..."
+                        class="w-full px-6 py-5 text-lg border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition shadow-sm"
+                        required
+                    >
+                    <button 
+                        type="submit"
+                        class="absolute right-2 top-2 px-8 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium"
+                    >
+                        Save & Summarize
+                    </button>
+                </form>
+                
+                <div id="formMessage" class="mt-4 hidden"></div>
+                
+                <p class="mt-4 text-sm text-gray-500">
+                    Example: youtube.com/watch?v=dQw4w9WgXcQ
+                </p>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading" class="hidden max-w-4xl mx-auto px-6 py-12 text-center">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+            <p class="mt-4 text-gray-600 font-medium">Loading your saved videos...</p>
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="hidden max-w-4xl mx-auto px-6 py-20 text-center">
+            <div class="w-16 h-16 bg-gray-100 rounded-full mx-auto mb-4 flex items-center justify-center">
+                <span class="text-3xl">📚</span>
+            </div>
+            <h3 class="text-xl font-semibold text-gray-900 mb-2">No videos saved yet</h3>
+            <p class="text-gray-600">Add your first YouTube video above to get started!</p>
+        </div>
+
+        <!-- Videos Grid -->
+        <div id="videosSection" class="hidden max-w-6xl mx-auto px-6 py-12">
+            <h2 class="text-3xl font-bold text-gray-900 mb-8">Your Saved Videos</h2>
+            <div id="videosList" class="grid gap-6">
+                <!-- Videos will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8080/api';
+
+        document.addEventListener('DOMContentLoaded', loadVideos);
+
+        // Handle form submission
+        document.getElementById('addVideoForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const urlInput = document.getElementById('videoUrl');
+            const url = urlInput.value.trim();
+            const messageDiv = document.getElementById('formMessage');
+            
+            if (!url) return;
+
+            messageDiv.className = 'p-4 rounded-xl bg-blue-50 text-blue-700 font-medium';
+            messageDiv.textContent = '⏳ Processing video and generating AI summary...';
+            messageDiv.classList.remove('hidden');
+
+            try {
+                const response = await fetch(`${API_URL}/videos`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    messageDiv.className = 'p-4 rounded-xl bg-green-50 text-green-700 font-medium';
+                    messageDiv.textContent = '✅ ' + (data.message || 'Video saved successfully!');
+                    urlInput.value = '';
+                    
+                    setTimeout(() => {
+                        loadVideos();
+                        messageDiv.classList.add('hidden');
+                    }, 2000);
+                } else {
+                    throw new Error(data.detail || 'Failed to save video');
+                }
+            } catch (error) {
+                messageDiv.className = 'p-4 rounded-xl bg-red-50 text-red-700 font-medium';
+                messageDiv.textContent = '❌ ' + error.message;
+            }
+        });
+
+        async function loadVideos() {
+            const loading = document.getElementById('loading');
+            const videosList = document.getElementById('videosList');
+            const emptyState = document.getElementById('emptyState');
+            const videosSection = document.getElementById('videosSection');
+
+            loading.classList.remove('hidden');
+            videosSection.classList.add('hidden');
+            emptyState.classList.add('hidden');
+            videosList.innerHTML = '';
+
+            try {
+                const response = await fetch(`${API_URL}/videos`);
+                const data = await response.json();
+
+                loading.classList.add('hidden');
+
+                if (data.success && data.data.length > 0) {
+                    videosSection.classList.remove('hidden');
+                    data.data.forEach(video => {
+                        videosList.appendChild(createVideoCard(video));
+                    });
+                } else {
+                    emptyState.classList.remove('hidden');
+                }
+            } catch (error) {
+                loading.classList.add('hidden');
+                videosSection.classList.remove('hidden');
+                videosList.innerHTML = `
+                    <div class="col-span-full bg-red-50 text-red-700 p-6 rounded-xl text-center">
+                        <p class="font-medium">Error loading videos</p>
+                        <p class="text-sm mt-1">${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function createVideoCard(video) {
+            const card = document.createElement('div');
+            card.className = 'bg-white border-2 border-gray-100 rounded-2xl p-6 hover:border-pink-200 hover:shadow-lg transition';
+            
+            const date = new Date(video.created_at).toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric', 
+                year: 'numeric' 
+            });
+
+            // Extract title - look for first ### heading that's not a subheading
+            let title = `Video ${video.video_id.substring(0, 8)}`;
+            if (video.ai_summary) {
+                // Match first ### or ** bold text at the start
+                const lines = video.ai_summary.split('\n');
+                for (let line of lines) {
+                    line = line.trim();
+                    if (line.startsWith('###')) {
+                        title = line.replace(/###\s+/g, '').replace(/[🗺️❤️🕎️🍺☕️🍴📺\|\*\=]/g, '').trim();
+                        break;
+                    } else if (line.startsWith('**') && line.endsWith('**')) {
+                        title = line.replace(/\*\*/g, '').replace(/[🗺️❤️🕎️🍺☕️🍴📺\|\=]/g, '').trim();
+                        break;
+                    }
+                }
+            }
+
+            const thumbnailUrl = `https://img.youtube.com/vi/${video.video_id}/mqdefault.jpg`;
+
+            card.innerHTML = `
+                <div class="flex items-start justify-between mb-4">
+                    <div class="flex-1 min-w-0 pr-4">
+                        <h3 class="font-bold text-gray-900 text-xl mb-3">
+                            ${title}
+                        </h3>
+                        <div class="flex flex-wrap gap-3 text-sm text-gray-500">
+                            <span>📅 ${date}</span>
+                            <span>🗣 ${video.language || 'Unknown'}</span>
+                            <span>📝 ${video.segments_count} segments</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-col items-end gap-2 flex-shrink-0">
+                        <img 
+                            src="${thumbnailUrl}" 
+                            alt="Video thumbnail" 
+                            class="w-32 h-20 object-cover rounded-lg shadow-sm"
+                            onerror="this.style.display='none'"
+                        >
+                        <a 
+                            href="${video.url}" 
+                            target="_blank" 
+                            class="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                        >
+                            Watch on YouTube →
+                        </a>
+                    </div>
+                </div>
+
+                ${video.ai_summary ? `
+                    <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-5 mb-4">
+                        <div class="text-gray-700 leading-relaxed">
+                            ${formatSummary(video.ai_summary)}
+                        </div>
+                    </div>
+                ` : `
+                    <div class="bg-yellow-50 rounded-xl p-4 mb-4 text-sm text-yellow-700">
+                        No AI summary available
+                    </div>
+                `}
+
+                <details class="group">
+                    <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900 font-medium flex items-center gap-2">
+                        <span>View full transcript</span>
+                        <svg class="w-4 h-4 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </summary>
+                    <div class="mt-3 p-4 bg-gray-50 rounded-xl text-sm text-gray-700 max-h-64 overflow-y-auto leading-relaxed">
+                        ${video.raw_transcript}
+                    </div>
+                </details>
+            `;
+
+            return card;
+        }
+
+        function formatSummary(summary) {
+            // Skip the first title line if it exists
+            let lines = summary.split('\n');
+            let processedLines = [];
+            let skipFirstHeading = false;
+            
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i].trim();
+                
+                // Skip the first ### or ** bold heading
+                if ((line.startsWith('###') || (line.startsWith('**') && line.endsWith('**'))) && !skipFirstHeading) {
+                    skipFirstHeading = true;
+                    continue;
+                }
+                
+                // Skip decoration lines
+                if (line.match(/^[=\-\*]{3,}$/)) {
+                    continue;
+                }
+                
+                processedLines.push(lines[i]);
+            }
+            
+            let html = processedLines.join('\n')
+                // Headers
+                .replace(/####\s+(.+?)(\n|$)/g, '<h5 class="font-semibold text-base mt-4 mb-2 text-gray-900">$1</h5>')
+                .replace(/###\s+(.+?)(\n|$)/g, '<h4 class="font-bold text-lg mt-4 mb-2 text-gray-900">$1</h4>')
+                // Bold
+                .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
+                // Numbered lists - preserve the structure
+                .replace(/^(\d+)\.\s+(.+?):/gm, '<div class="font-semibold text-gray-900 mt-3 mb-1">$1. $2:</div>')
+                // Bullet points with asterisk or dash
+                .replace(/^\*\s+(.+?)$/gm, '<li class="ml-6 mb-1">$1</li>')
+                .replace(/^-\s+(.+?)$/gm, '<li class="ml-6 mb-1">$1</li>')
+                // Double line breaks
+                .replace(/\n\n/g, '<br><br>')
+                // Single line breaks
+                .replace(/\n/g, '<br>');
+            
+            // Wrap consecutive <li> tags in <ul>
+            html = html.replace(/(<li class="ml-6 mb-1">.*?<\/li>(<br>)*)+/g, (match) => {
+                return '<ul class="list-disc space-y-1 my-2">' + match.replace(/<br>/g, '') + '</ul>';
+            });
+            
+            return html;
+        }
+    </script>
+</body>
+</html>
