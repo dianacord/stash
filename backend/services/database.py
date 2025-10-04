@@ -35,8 +35,8 @@ class DatabaseService:
         conn.commit()
         conn.close()
     
-    def save_video(self, video_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Save a video to the database"""
+    def save_video(self, video_data: Dict[str, Any], user_id: int) -> Dict[str, Any]:
+        """Save a video to the database with user_id"""
         conn = None
         try:
             conn = sqlite3.connect(self.db_path)
@@ -45,8 +45,8 @@ class DatabaseService:
             
             cursor.execute('''
                 INSERT INTO saved_videos 
-                (url, video_id, platform, raw_transcript, ai_summary, language, is_generated, segments_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (url, video_id, platform, raw_transcript, ai_summary, language, is_generated, segments_count, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 video_data['url'],
                 video_data['video_id'],
@@ -55,7 +55,8 @@ class DatabaseService:
                 video_data.get('ai_summary'),
                 video_data.get('language'),
                 video_data.get('is_generated'),
-                video_data.get('segments_count')
+                video_data.get('segments_count'),
+                user_id 
             ))
             
             conn.commit()
@@ -68,17 +69,33 @@ class DatabaseService:
                 return {'success': True, 'data': dict(row)}
             else:
                 return {'success': False, 'error': 'Video inserted but could not retrieve'}
-            
+                
         except sqlite3.IntegrityError as e:
             return {'success': False, 'error': f'Video already exists: {str(e)}'}
-            
-        except KeyError as e:
-            return {'success': False, 'error': f'Missing required field: {str(e)}'}
-            
         except Exception as e:
-            error_msg = f'{type(e).__name__}: {str(e)}' if str(e) else f'{type(e).__name__}'
-            return {'success': False, 'error': error_msg}
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()
+
+    def get_user_videos(self, user_id: int) -> List[Dict[str, Any]]:
+        """Get all videos for a specific user"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
             
+            cursor.execute(
+                'SELECT * FROM saved_videos WHERE user_id = ? ORDER BY created_at DESC',
+                (user_id,)
+            )
+            rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+            
+        except Exception:
+            return []
         finally:
             if conn:
                 conn.close()
@@ -119,6 +136,76 @@ class DatabaseService:
         except Exception:
             return []
             
+        finally:
+            if conn:
+                conn.close()
+
+    def create_user(self, username: str, hashed_password: str) -> Dict[str, Any]:
+        """Create a new user"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO users (username, hashed_password)
+                VALUES (?, ?)
+            ''', (username, hashed_password))
+            
+            conn.commit()
+            user_id = cursor.lastrowid
+            
+            cursor.execute('SELECT id, username, created_at FROM users WHERE id = ?', (user_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return {'success': True, 'data': dict(row)}
+            else:
+                return {'success': False, 'error': 'User created but could not retrieve'}
+                
+        except sqlite3.IntegrityError:
+            return {'success': False, 'error': 'Username already exists'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()
+
+    def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Get user by username (includes hashed_password for auth)"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+            row = cursor.fetchone()
+            
+            return dict(row) if row else None
+            
+        except Exception:
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get user by ID"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT id, username, created_at FROM users WHERE id = ?', (user_id,))
+            row = cursor.fetchone()
+            
+            return dict(row) if row else None
+            
+        except Exception:
+            return None
         finally:
             if conn:
                 conn.close()
