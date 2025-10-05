@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from typing import Optional
 from datetime import timedelta
 from pydantic import BaseModel
@@ -27,6 +29,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+async def read_root():
+    """Serve the main frontend page"""
+    return FileResponse("frontend/index.html")
 
 # Initialize services
 youtube_fetcher = YouTubeFetcher()
