@@ -11,52 +11,31 @@
     </style>
 </head>
 <body class="bg-white">
-    <!-- Auth Modal (Login/Signup) -->
+    <!-- Auth Modal -->
     <div id="authModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
         <div class="bg-white rounded-2xl p-8 max-w-md w-full mx-4">
             <h2 id="authTitle" class="text-2xl font-bold text-gray-900 mb-6">Login to Stash</h2>
-            
             <form id="authForm">
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Username</label>
-                    <input 
-                        type="text" 
-                        id="authUsername" 
-                        class="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
-                        required
-                    >
+                    <input type="text" id="authUsername" class="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none" required>
                 </div>
-                
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Password</label>
-                    <input 
-                        type="password" 
-                        id="authPassword" 
-                        class="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
-                        required
-                    >
+                    <input type="password" id="authPassword" class="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none" required>
                 </div>
-                
                 <div id="authError" class="hidden mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm"></div>
-                
-                <button 
-                    type="submit" 
-                    class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
-                >
+                <button type="submit" class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
                     <span id="authButtonText">Login</span>
                 </button>
             </form>
-            
             <div class="mt-4 text-center text-sm text-gray-600">
                 <span id="authSwitchText">Don't have an account?</span>
-                <button id="authSwitchBtn" class="text-blue-600 hover:text-blue-700 font-medium ml-1">
-                    Sign up
-                </button>
+                <button id="authSwitchBtn" class="text-blue-600 hover:text-blue-700 font-medium ml-1">Sign up</button>
             </div>
         </div>
     </div>
 
-    <!-- Main App -->
     <div class="min-h-screen">
         <!-- Navigation -->
         <nav class="border-b border-gray-200">
@@ -67,75 +46,34 @@
                     </div>
                     <span class="text-xl font-bold text-gray-900">Stash</span>
                 </div>
-                
-                <!-- User Info & Logout (shown when logged in) -->
                 <div id="userInfo" class="hidden flex items-center gap-4">
-                    <span class="text-sm text-gray-600">
-                        Welcome, <span id="usernameDisplay" class="font-semibold text-gray-900"></span>
-                    </span>
-                    <button 
-                        id="logoutBtn"
-                        class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 font-medium"
-                    >
-                        Logout
-                    </button>
+                    <span class="text-sm text-gray-600">Welcome, <span id="usernameDisplay" class="font-semibold text-gray-900"></span></span>
+                    <button id="logoutBtn" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 font-medium">Logout</button>
                 </div>
-                
-                <!-- Login Button (shown when logged out) -->
-                <button 
-                    id="loginBtn"
-                    class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
-                >
-                    Login
-                </button>
+                <button id="loginBtn" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">Login</button>
             </div>
         </nav>
 
-        <!-- Content (only shown when logged in) -->
+        <!-- Main Content -->
         <div id="mainContent" class="hidden">
-            <!-- Hero Content -->
             <div class="max-w-4xl mx-auto px-6 pt-24 pb-16 text-center">
-                <h1 class="text-7xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 mb-6 leading-tight">
-                    Stash
-                </h1>
-                
-                <p class="text-2xl md:text-3xl text-gray-700 font-medium mb-12">
-                    Turn YouTube videos into organized, searchable notes
-                </p>
-
-                <!-- Search Box -->
+                <h1 class="text-7xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 mb-6 leading-tight">Stash</h1>
+                <p class="text-2xl md:text-3xl text-gray-700 font-medium mb-12">Turn YouTube videos into organized, useful notes</p>
                 <div class="max-w-2xl mx-auto">
                     <form id="addVideoForm" class="relative">
-                        <input 
-                            type="text" 
-                            id="videoUrl" 
-                            placeholder="Paste any YouTube URL here..."
-                            class="w-full px-6 py-5 text-lg border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition shadow-sm"
-                            required
-                        >
-                        <button 
-                            type="submit"
-                            class="absolute right-2 top-2 px-8 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium"
-                        >
-                            Save & Summarize
-                        </button>
+                        <input type="text" id="videoUrl" placeholder="Paste any YouTube URL here..." class="w-full px-6 py-5 text-lg border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition shadow-sm" required>
+                        <button type="submit" class="absolute right-2 top-2 px-8 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium">Save & Summarize</button>
                     </form>
-                    
                     <div id="formMessage" class="mt-4 hidden"></div>
-                    
-                    <p class="mt-4 text-sm text-gray-500">
-                        Example: youtube.com/watch?v=dQw4w9WgXcQ
-                    </p>
+                    <p class="mt-4 text-sm text-gray-500">Example: youtube.com/watch?v=dQw4w9WgXcQ</p>
                 </div>
             </div>
 
-            <!-- Loading State -->
             <div id="loading" class="hidden max-w-4xl mx-auto px-6 py-12 text-center">
                 <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
                 <p class="mt-4 text-gray-600 font-medium">Loading your saved videos...</p>
             </div>
 
-            <!-- Empty State -->
             <div id="emptyState" class="hidden max-w-4xl mx-auto px-6 py-20 text-center">
                 <div class="w-16 h-16 bg-gray-100 rounded-full mx-auto mb-4 flex items-center justify-center">
                     <span class="text-3xl">📚</span>
@@ -144,83 +82,47 @@
                 <p class="text-gray-600">Add your first YouTube video above to get started!</p>
             </div>
 
-            <!-- Videos Grid -->
             <div id="videosSection" class="hidden max-w-6xl mx-auto px-6 py-12">
                 <h2 class="text-3xl font-bold text-gray-900 mb-8">Your Saved Videos</h2>
-                <div id="videosList" class="grid gap-6">
-                    <!-- Videos will be inserted here -->
-                </div>
+                <div id="videosList" class="grid gap-6"></div>
             </div>
         </div>
 
-        <!-- Welcome Screen (shown when logged out) -->
+        <!-- Welcome Screen -->
         <div id="welcomeScreen" class="max-w-4xl mx-auto px-6 py-32 text-center">
-            <h1 class="text-7xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 mb-6 leading-tight">
-                Stash
-            </h1>
-            
-            <p class="text-2xl md:text-3xl text-gray-700 font-medium mb-12">
-                Turn YouTube videos into organized, searchable notes
-            </p>
-            
-            <button 
-                id="welcomeLoginBtn"
-                class="px-8 py-4 bg-blue-600 text-white text-lg rounded-xl hover:bg-blue-700 transition font-semibold shadow-lg"
-            >
-                Get Started - Login or Sign Up
-            </button>
+            <h1 class="text-7xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 mb-6 leading-tight">Stash</h1>
+            <p class="text-2xl md:text-3xl text-gray-700 font-medium mb-12">Turn YouTube videos into organized, useful notes</p>
+            <button id="welcomeLoginBtn" class="px-8 py-4 bg-blue-600 text-white text-lg rounded-xl hover:bg-blue-700 transition font-semibold shadow-lg">Get Started - Login or Sign Up</button>
         </div>
     </div>
 
     <script>
         const API_URL = 'http://localhost:8080/api';
-        let authMode = 'login'; // 'login' or 'signup'
+        let authMode = 'login';
 
-        // ============================================
-        // Auth State Management
-        // ============================================
-
-        function getToken() {
-            return localStorage.getItem('stash_token');
-        }
-
-        function getUsername() {
-            return localStorage.getItem('stash_username');
-        }
-
+        function getToken() { return localStorage.getItem('stash_token'); }
+        function getUsername() { return localStorage.getItem('stash_username'); }
         function setAuth(token, username) {
             localStorage.setItem('stash_token', token);
             localStorage.setItem('stash_username', username);
         }
-
         function clearAuth() {
             localStorage.removeItem('stash_token');
             localStorage.removeItem('stash_username');
         }
-
-        function isLoggedIn() {
-            return !!getToken();
-        }
+        function isLoggedIn() { return !!getToken(); }
 
         function updateUIForAuthState() {
             const loggedIn = isLoggedIn();
-            
-            // Show/hide elements based on auth state
             document.getElementById('mainContent').classList.toggle('hidden', !loggedIn);
             document.getElementById('welcomeScreen').classList.toggle('hidden', loggedIn);
             document.getElementById('userInfo').classList.toggle('hidden', !loggedIn);
             document.getElementById('loginBtn').classList.toggle('hidden', loggedIn);
-            
-            // Update username display
             if (loggedIn) {
                 document.getElementById('usernameDisplay').textContent = getUsername();
                 loadVideos();
             }
         }
-
-        // ============================================
-        // Auth Modal
-        // ============================================
 
         function showAuthModal(mode = 'login') {
             authMode = mode;
@@ -229,7 +131,6 @@
             const buttonText = document.getElementById('authButtonText');
             const switchText = document.getElementById('authSwitchText');
             const switchBtn = document.getElementById('authSwitchBtn');
-            
             if (mode === 'login') {
                 title.textContent = 'Login to Stash';
                 buttonText.textContent = 'Login';
@@ -241,12 +142,9 @@
                 switchText.textContent = 'Already have an account?';
                 switchBtn.textContent = 'Login';
             }
-            
-            // Clear form
             document.getElementById('authUsername').value = '';
             document.getElementById('authPassword').value = '';
             document.getElementById('authError').classList.add('hidden');
-            
             modal.classList.remove('hidden');
         }
 
@@ -254,21 +152,14 @@
             document.getElementById('authModal').classList.add('hidden');
         }
 
-        // ============================================
-        // Auth Event Handlers
-        // ============================================
-
         document.getElementById('loginBtn').addEventListener('click', () => showAuthModal('login'));
         document.getElementById('welcomeLoginBtn').addEventListener('click', () => showAuthModal('login'));
-
         document.getElementById('authSwitchBtn').addEventListener('click', () => {
             showAuthModal(authMode === 'login' ? 'signup' : 'login');
         });
-
         document.getElementById('authModal').addEventListener('click', (e) => {
             if (e.target.id === 'authModal') hideAuthModal();
         });
-
         document.getElementById('logoutBtn').addEventListener('click', () => {
             clearAuth();
             updateUIForAuthState();
@@ -276,11 +167,9 @@
 
         document.getElementById('authForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            
             const username = document.getElementById('authUsername').value;
             const password = document.getElementById('authPassword').value;
             const errorDiv = document.getElementById('authError');
-            
             try {
                 const endpoint = authMode === 'login' ? '/auth/login' : '/auth/signup';
                 const response = await fetch(`${API_URL}${endpoint}`, {
@@ -288,9 +177,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password })
                 });
-
                 const data = await response.json();
-
                 if (response.ok) {
                     setAuth(data.access_token, data.username);
                     hideAuthModal();
@@ -305,23 +192,15 @@
             }
         });
 
-        // ============================================
-        // Video Management (with Auth)
-        // ============================================
-
         document.getElementById('addVideoForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            
             const urlInput = document.getElementById('videoUrl');
             const url = urlInput.value.trim();
             const messageDiv = document.getElementById('formMessage');
-            
             if (!url) return;
-
             messageDiv.className = 'p-4 rounded-xl bg-blue-50 text-blue-700 font-medium';
             messageDiv.textContent = '⏳ Processing video and generating AI summary...';
             messageDiv.classList.remove('hidden');
-
             try {
                 const response = await fetch(`${API_URL}/videos`, {
                     method: 'POST',
@@ -331,14 +210,11 @@
                     },
                     body: JSON.stringify({ url })
                 });
-
                 const data = await response.json();
-
                 if (response.ok) {
                     messageDiv.className = 'p-4 rounded-xl bg-green-50 text-green-700 font-medium';
                     messageDiv.textContent = '✅ ' + (data.message || 'Video saved successfully!');
                     urlInput.value = '';
-                    
                     setTimeout(() => {
                         loadVideos();
                         messageDiv.classList.add('hidden');
@@ -357,22 +233,16 @@
             const videosList = document.getElementById('videosList');
             const emptyState = document.getElementById('emptyState');
             const videosSection = document.getElementById('videosSection');
-
             loading.classList.remove('hidden');
             videosSection.classList.add('hidden');
             emptyState.classList.add('hidden');
             videosList.innerHTML = '';
-
             try {
                 const response = await fetch(`${API_URL}/videos`, {
-                    headers: {
-                        'Authorization': `Bearer ${getToken()}`
-                    }
+                    headers: { 'Authorization': `Bearer ${getToken()}` }
                 });
                 const data = await response.json();
-
                 loading.classList.add('hidden');
-
                 if (data.success && data.data.length > 0) {
                     videosSection.classList.remove('hidden');
                     data.data.forEach(video => {
@@ -384,25 +254,15 @@
             } catch (error) {
                 loading.classList.add('hidden');
                 videosSection.classList.remove('hidden');
-                videosList.innerHTML = `
-                    <div class="col-span-full bg-red-50 text-red-700 p-6 rounded-xl text-center">
-                        <p class="font-medium">Error loading videos</p>
-                        <p class="text-sm mt-1">${error.message}</p>
-                    </div>
-                `;
+                videosList.innerHTML = `<div class="col-span-full bg-red-50 text-red-700 p-6 rounded-xl text-center"><p class="font-medium">Error loading videos</p><p class="text-sm mt-1">${error.message}</p></div>`;
             }
         }
 
         function createVideoCard(video) {
             const card = document.createElement('div');
             card.className = 'bg-white border-2 border-gray-100 rounded-2xl p-6 hover:border-pink-200 hover:shadow-lg transition';
-            
-            const date = new Date(video.created_at).toLocaleDateString('en-US', { 
-                month: 'short', 
-                day: 'numeric', 
-                year: 'numeric' 
-            });
-
+            card.id = `video-${video.video_id}`;
+            const date = new Date(video.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             let title = `Video ${video.video_id.substring(0, 8)}`;
             if (video.ai_summary) {
                 const lines = video.ai_summary.split('\n');
@@ -417,15 +277,12 @@
                     }
                 }
             }
-
             const thumbnailUrl = `https://img.youtube.com/vi/${video.video_id}/mqdefault.jpg`;
 
             card.innerHTML = `
                 <div class="flex items-start justify-between mb-4">
                     <div class="flex-1 min-w-0 pr-4">
-                        <h3 class="font-bold text-gray-900 text-xl mb-3">
-                            ${title}
-                        </h3>
+                        <h3 class="font-bold text-gray-900 text-xl mb-3">${title}</h3>
                         <div class="flex flex-wrap gap-3 text-sm text-gray-500">
                             <span>📅 ${date}</span>
                             <span>🗣 ${video.language || 'Unknown'}</span>
@@ -433,70 +290,119 @@
                         </div>
                     </div>
                     <div class="flex flex-col items-end gap-2 flex-shrink-0">
-                        <img 
-                            src="${thumbnailUrl}" 
-                            alt="Video thumbnail" 
-                            class="w-32 h-20 object-cover rounded-lg shadow-sm"
-                            onerror="this.style.display='none'"
-                        >
-                        <a 
-                            href="${video.url}" 
-                            target="_blank" 
-                            class="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                        >
-                            Watch on YouTube →
-                        </a>
+                        <img src="${thumbnailUrl}" alt="Video thumbnail" class="w-32 h-20 object-cover rounded-lg shadow-sm" onerror="this.style.display='none'">
+                        <a href="${video.url}" target="_blank" class="text-blue-600 hover:text-blue-700 text-sm font-medium">Watch on YouTube →</a>
                     </div>
                 </div>
 
                 ${video.ai_summary ? `
-                    <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-5 mb-4">
-                        <div class="text-gray-700 leading-relaxed">
-                            ${formatSummary(video.ai_summary)}
+                    <div id="summary-view-${video.video_id}" class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-5 mb-4">
+                        <div class="text-gray-700 leading-relaxed">${formatSummary(video.ai_summary)}</div>
+                    </div>
+                    <div id="summary-edit-${video.video_id}" class="hidden mb-4">
+                        <textarea id="summary-textarea-${video.video_id}" class="w-full p-4 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none" rows="8">${video.ai_summary}</textarea>
+                        <div class="flex gap-2 mt-2">
+                            <button onclick="saveEdit('${video.video_id}')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm">Save Changes</button>
+                            <button onclick="cancelEdit('${video.video_id}')" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition text-sm">Cancel</button>
                         </div>
                     </div>
                 ` : `
-                    <div class="bg-yellow-50 rounded-xl p-4 mb-4 text-sm text-yellow-700">
-                        No AI summary available
-                    </div>
+                    <div class="bg-yellow-50 rounded-xl p-4 mb-4 text-sm text-yellow-700">No AI summary available</div>
                 `}
 
-                <details class="group">
+                <details class="group mb-4">
                     <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900 font-medium flex items-center gap-2">
                         <span>View full transcript</span>
                         <svg class="w-4 h-4 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
                         </svg>
                     </summary>
-                    <div class="mt-3 p-4 bg-gray-50 rounded-xl text-sm text-gray-700 max-h-64 overflow-y-auto leading-relaxed">
-                        ${video.raw_transcript}
-                    </div>
+                    <div class="mt-3 p-4 bg-gray-50 rounded-xl text-sm text-gray-700 max-h-64 overflow-y-auto leading-relaxed">${video.raw_transcript}</div>
                 </details>
-            `;
 
+                <div class="flex gap-2 pt-4 border-t border-gray-200">
+                    <button onclick="editVideo('${video.video_id}')" class="flex-1 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition text-sm font-medium">✏️ Edit Summary</button>
+                    <button onclick="deleteVideo('${video.video_id}')" class="flex-1 px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition text-sm font-medium">🗑️ Delete</button>
+                </div>
+            `;
             return card;
+        }
+
+        function editVideo(videoId) {
+            document.getElementById(`summary-view-${videoId}`).classList.add('hidden');
+            document.getElementById(`summary-edit-${videoId}`).classList.remove('hidden');
+        }
+
+        function cancelEdit(videoId) {
+            document.getElementById(`summary-view-${videoId}`).classList.remove('hidden');
+            document.getElementById(`summary-edit-${videoId}`).classList.add('hidden');
+        }
+
+        async function saveEdit(videoId) {
+            const newSummary = document.getElementById(`summary-textarea-${videoId}`).value;
+            try {
+                const response = await fetch(`${API_URL}/videos/${videoId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${getToken()}`
+                    },
+                    body: JSON.stringify({ ai_summary: newSummary })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    await loadVideos();
+                    alert('Summary updated successfully!');
+                } else {
+                    throw new Error(data.detail || 'Failed to update video');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function deleteVideo(videoId) {
+            if (!confirm('Are you sure you want to delete this video? This cannot be undone.')) return;
+            try {
+                const response = await fetch(`${API_URL}/videos/${videoId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${getToken()}` }
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    const card = document.getElementById(`video-${videoId}`);
+                    card.style.transition = 'opacity 0.3s';
+                    card.style.opacity = '0';
+                    setTimeout(() => {
+                        card.remove();
+                        const videosList = document.getElementById('videosList');
+                        if (videosList.children.length === 0) {
+                            document.getElementById('videosSection').classList.add('hidden');
+                            document.getElementById('emptyState').classList.remove('hidden');
+                        }
+                    }, 300);
+                    alert('Video deleted successfully!');
+                } else {
+                    throw new Error(data.detail || 'Failed to delete video');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
         }
 
         function formatSummary(summary) {
             let lines = summary.split('\n');
             let processedLines = [];
             let skipFirstHeading = false;
-            
             for (let i = 0; i < lines.length; i++) {
                 let line = lines[i].trim();
-                
                 if ((line.startsWith('###') || (line.startsWith('**') && line.endsWith('**'))) && !skipFirstHeading) {
                     skipFirstHeading = true;
                     continue;
                 }
-                
-                if (line.match(/^[=\-\*]{3,}$/)) {
-                    continue;
-                }
-                
+                if (line.match(/^[=\-\*]{3,}$/)) continue;
                 processedLines.push(lines[i]);
             }
-            
             let html = processedLines.join('\n')
                 .replace(/####\s+(.+?)(\n|$)/g, '<h5 class="font-semibold text-base mt-4 mb-2 text-gray-900">$1</h5>')
                 .replace(/###\s+(.+?)(\n|$)/g, '<h4 class="font-bold text-lg mt-4 mb-2 text-gray-900">$1</h4>')
@@ -506,15 +412,12 @@
                 .replace(/^-\s+(.+?)$/gm, '<li class="ml-6 mb-1">$1</li>')
                 .replace(/\n\n/g, '<br><br>')
                 .replace(/\n/g, '<br>');
-            
             html = html.replace(/(<li class="ml-6 mb-1">.*?<\/li>(<br>)*)+/g, (match) => {
                 return '<ul class="list-disc space-y-1 my-2">' + match.replace(/<br>/g, '') + '</ul>';
             });
-            
             return html;
         }
 
-        // Initialize on page load
         document.addEventListener('DOMContentLoaded', updateUIForAuthState);
     </script>
 </body>
