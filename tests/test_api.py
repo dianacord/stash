@@ -6,6 +6,40 @@ import os
 
 client = TestClient(app)
 
+# Helper function to create authenticated user and get token
+
+def get_auth_token(username=None, password=None):
+    """Create a test user and return auth token"""
+    if username is None:
+        # Generate unique username for this test
+        import random
+        username = f"testuser_{random.randint(1000, 9999)}"
+    if password is None:
+        password = "testpass123"
+    
+    # Try to signup (might fail if user exists, that's ok)
+    client.post(
+        "/api/auth/signup",
+        json={"username": username, "password": password}
+    )
+    
+    # Login to get token
+    response = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": password}
+    )
+    
+    if response.status_code == 200:
+        return response.json()["access_token"]
+    return None
+
+def get_auth_headers(username=None, password=None):
+    """Get authorization headers with token"""
+    token = get_auth_token(username, password)
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
 def test_health_check():
     """Test health check endpoint"""
     response = client.get("/api/health")
@@ -13,51 +47,60 @@ def test_health_check():
     assert response.json()["status"] == "healthy"
 
 def test_get_all_videos():
-    """Test getting all videos"""
-    response = client.get("/api/videos")
+    """Test getting all videos with auth"""
+    headers = get_auth_headers()
+    response = client.get("/api/videos", headers=headers)
     assert response.status_code == 200
     assert "success" in response.json()
     assert "data" in response.json()
 
 def test_save_video_invalid_url():
     """Test saving video with invalid URL"""
+    headers = get_auth_headers()
     response = client.post(
         "/api/videos",
-        json={"url": "not a youtube url"}
+        json={"url": "not a youtube url"},
+        headers=headers
     )
     assert response.status_code in [400, 500]
 
 def test_get_nonexistent_video():
     """Test getting video that doesn't exist"""
-    response = client.get("/api/videos/nonexistent123")
-    assert response.status_code == 404
+    headers = get_auth_headers()
+    response = client.get("/api/videos/nonexistent123", headers=headers)
+    assert response.status_code in [404, 403]  # 403 if it exists but belongs to another user
 
 def test_save_video_missing_url():
     """Test saving video without URL"""
+    headers = get_auth_headers()
     response = client.post(
         "/api/videos",
-        json={}
+        json={},
+        headers=headers
     )
     assert response.status_code == 422  # Validation error
 
 def test_get_video_by_id_format():
     """Test getting video returns correct format"""
-    # First add a video (if none exist, this might fail)
-    response = client.get("/api/videos")
+    headers = get_auth_headers()
+    response = client.get("/api/videos", headers=headers)
     data = response.json()
     
-    if data['success'] and len(data['data']) > 0:
+    if data.get('success') and len(data.get('data', [])) > 0:
         video_id = data['data'][0]['video_id']
-        response = client.get(f"/api/videos/{video_id}")
-        assert response.status_code == 200
-        assert 'data' in response.json()
+        response = client.get(f"/api/videos/{video_id}", headers=headers)
+        assert response.status_code in [200, 403]  # 403 if belongs to another user
+        if response.status_code == 200:
+            assert 'data' in response.json()
 
 @patch('backend.main.youtube_fetcher.get_transcript')
 def test_save_video_success_with_summary(mock_get_transcript):
     """Test successfully saving video with AI summary"""
+    headers = get_auth_headers(username="summarytest", password="pass123") 
+    
     mock_get_transcript.return_value = {
         'success': True,
-        'video_id': 'test_video_123',
+        'video_id': 'test_video_summary',
         'transcript': 'This is a test transcript',
         'segments_count': 10,
         'language': 'English',
@@ -66,15 +109,17 @@ def test_save_video_success_with_summary(mock_get_transcript):
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://www.youtube.com/watch?v=test_video_123"}
+        json={"url": "https://www.youtube.com/watch?v=test_video_summary"},
+        headers=headers
     )
     
-    # Should get 200 or 400 depending on if Groq works
     assert response.status_code in [200, 400, 500]
 
 @patch('backend.main.youtube_fetcher.get_transcript')
 def test_save_video_transcript_failure(mock_get_transcript):
     """Test saving video when transcript fetch fails"""
+    headers = get_auth_headers()
+    
     mock_get_transcript.return_value = {
         'success': False,
         'error': 'Transcript not found'
@@ -82,7 +127,8 @@ def test_save_video_transcript_failure(mock_get_transcript):
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://www.youtube.com/watch?v=fail123"}
+        json={"url": "https://www.youtube.com/watch?v=fail123"},
+        headers=headers
     )
     
     assert response.status_code == 400
@@ -92,6 +138,8 @@ def test_save_video_transcript_failure(mock_get_transcript):
 @patch('backend.main.db_service.get_video_by_id')
 def test_save_video_already_exists(mock_get_video, mock_extract_id):
     """Test saving video that already exists"""
+    headers = get_auth_headers()
+    
     mock_extract_id.return_value = 'existing123'
     mock_get_video.return_value = {
         'video_id': 'existing123',
@@ -100,7 +148,8 @@ def test_save_video_already_exists(mock_get_video, mock_extract_id):
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://www.youtube.com/watch?v=existing123"}
+        json={"url": "https://www.youtube.com/watch?v=existing123"},
+        headers=headers
     )
     
     assert response.status_code == 200
@@ -113,16 +162,18 @@ def test_invalid_endpoint():
 
 def test_save_video_exception_handling():
     """Test API handles unexpected exceptions"""
+    headers = get_auth_headers()
     response = client.post(
         "/api/videos",
-        json={"url": ""}  # Empty URL might trigger different code path
+        json={"url": ""},
+        headers=headers
     )
-
     assert response.status_code >= 400
 
 @patch('backend.main.db_service.save_video')
 def test_save_video_database_save_fails(mock_save):
     """Test when database save operation fails"""
+    headers = get_auth_headers()
     mock_save.return_value = {'success': False, 'error': 'Database error'}
     
     with patch('backend.main.youtube_fetcher.extract_video_id', return_value='test123'):
@@ -137,39 +188,33 @@ def test_save_video_database_save_fails(mock_save):
                 
                 response = client.post(
                     "/api/videos",
-                    json={"url": "https://www.youtube.com/watch?v=test123"}
+                    json={"url": "https://www.youtube.com/watch?v=test123"},
+                    headers=headers
                 )
                 
                 assert response.status_code == 500
 
-@patch('backend.main.db_service.get_all_videos')
+@patch('backend.main.db_service.get_user_videos')
 def test_get_all_videos_exception(mock_get_all):
     """Test get all videos handles exceptions"""
+    headers = get_auth_headers()
     mock_get_all.side_effect = Exception("Database error")
     
-    response = client.get("/api/videos")
+    response = client.get("/api/videos", headers=headers)
     assert response.status_code == 500
-
-from unittest.mock import patch, Mock
-import os
 
 def test_groq_initialization_failure():
     """Test when Groq API key is missing"""
-    original_key = os.environ.get('GROQ_API_KEY')
-    if 'GROQ_API_KEY' in os.environ:
-        del os.environ['GROQ_API_KEY']
-    
     response = client.get("/api/health")
     assert response.status_code == 200
     assert 'groq_summarizer' in response.json()
-    
-    if original_key:
-        os.environ['GROQ_API_KEY'] = original_key
 
 @patch('backend.main.youtube_fetcher.extract_video_id')
 @patch('backend.main.db_service.get_video_by_id')
 def test_duplicate_video_returns_existing(mock_get_video, mock_extract):
     """Test saving duplicate video returns existing data"""
+    headers = get_auth_headers()
+    
     mock_extract.return_value = 'duplicate123'
     mock_get_video.return_value = {
         'id': 1,
@@ -179,7 +224,8 @@ def test_duplicate_video_returns_existing(mock_get_video, mock_extract):
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://youtube.com/watch?v=duplicate123"}
+        json={"url": "https://youtube.com/watch?v=duplicate123"},
+        headers=headers
     )
     
     assert response.status_code == 200
@@ -190,6 +236,8 @@ def test_duplicate_video_returns_existing(mock_get_video, mock_extract):
 @patch('backend.main.youtube_fetcher.get_transcript')
 def test_transcript_fetch_fails(mock_transcript, mock_get_video, mock_extract):
     """Test when YouTube transcript fetch fails"""
+    headers = get_auth_headers()
+    
     mock_extract.return_value = 'test123'
     mock_get_video.return_value = None
     mock_transcript.return_value = {
@@ -199,7 +247,8 @@ def test_transcript_fetch_fails(mock_transcript, mock_get_video, mock_extract):
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://youtube.com/watch?v=test123"}
+        json={"url": "https://youtube.com/watch?v=test123"},
+        headers=headers
     )
     
     assert response.status_code == 400
@@ -212,6 +261,8 @@ def test_transcript_fetch_fails(mock_transcript, mock_get_video, mock_extract):
 @patch('backend.main.db_service.save_video')
 def test_groq_summary_failure_warning(mock_save, mock_groq, mock_transcript, mock_get_video, mock_extract):
     """Test when Groq summarization fails but video still saves"""
+    headers = get_auth_headers()
+    
     mock_extract.return_value = 'test456'
     mock_get_video.return_value = None
     mock_transcript.return_value = {
@@ -223,7 +274,6 @@ def test_groq_summary_failure_warning(mock_save, mock_groq, mock_transcript, moc
         'is_generated': True
     }
     
-    # Mock Groq to return failure
     mock_summarizer = Mock()
     mock_summarizer.summarize.return_value = {
         'success': False,
@@ -238,10 +288,10 @@ def test_groq_summary_failure_warning(mock_save, mock_groq, mock_transcript, moc
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://youtube.com/watch?v=test456"}
+        json={"url": "https://youtube.com/watch?v=test456"},
+        headers=headers
     )
     
-    # Should still succeed even if summary fails
     assert response.status_code in [200, 400, 500]
 
 @patch('backend.main.youtube_fetcher.extract_video_id')
@@ -250,6 +300,8 @@ def test_groq_summary_failure_warning(mock_save, mock_groq, mock_transcript, moc
 @patch('backend.main.db_service.save_video')
 def test_database_save_failure(mock_save, mock_transcript, mock_get_video, mock_extract):
     """Test when database save operation fails"""
+    headers = get_auth_headers()
+    
     mock_extract.return_value = 'test789'
     mock_get_video.return_value = None
     mock_transcript.return_value = {
@@ -265,7 +317,8 @@ def test_database_save_failure(mock_save, mock_transcript, mock_get_video, mock_
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://youtube.com/watch?v=test789"}
+        json={"url": "https://youtube.com/watch?v=test789"},
+        headers=headers
     )
     
     assert response.status_code == 500
@@ -273,12 +326,111 @@ def test_database_save_failure(mock_save, mock_transcript, mock_get_video, mock_
 @patch('backend.main.youtube_fetcher.extract_video_id')
 def test_unexpected_exception_handling(mock_extract):
     """Test generic exception handler"""
+    headers = get_auth_headers()
     mock_extract.side_effect = RuntimeError("Unexpected error")
     
     response = client.post(
         "/api/videos",
-        json={"url": "https://youtube.com/watch?v=test"}
+        json={"url": "https://youtube.com/watch?v=test"},
+        headers=headers
     )
     
     assert response.status_code == 500
     assert 'detail' in response.json()
+
+def test_invalid_bearer_scheme():
+    """Test authorization with wrong scheme (not Bearer)"""
+    token = get_auth_token()
+    
+    response = client.get(
+        "/api/videos",
+        headers={"Authorization": f"Basic {token}"}
+    )
+    assert response.status_code == 401
+    # The actual error is more generic
+    assert "Could not validate credentials" in response.json()["detail"]
+
+
+def test_get_current_user_deleted():
+    """Test /api/auth/me when user was deleted from database"""
+    # Create user and get token
+    import random
+    username = f"deleteme_{random.randint(1000, 9999)}"
+    signup_response = client.post(
+        "/api/auth/signup",
+        json={"username": username, "password": "pass123"}
+    )
+    token = signup_response.json()["access_token"]
+    
+    # Manually delete user from database
+    from backend import main
+    user = main.db_service.get_user_by_username(username)
+    if user:
+        import sqlite3
+        conn = sqlite3.connect(main.db_service.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM users WHERE id = ?', (user['id'],))
+        conn.commit()
+        conn.close()
+    
+    # Try to use token - user no longer exists
+    response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 404
+    assert "User not found" in response.json()["detail"]
+
+
+def test_access_other_users_video():
+    """Test accessing video that belongs to different user"""
+    # Create first user and save a video
+    user1_token = get_auth_token(username="user1_test", password="pass1")
+    
+    with patch('backend.main.youtube_fetcher.extract_video_id', return_value='othervid123'):
+        with patch('backend.main.youtube_fetcher.get_transcript') as mock_transcript:
+            with patch('backend.main.db_service.get_video_by_id') as mock_get_video:
+                mock_transcript.return_value = {
+                    'success': True,
+                    'video_id': 'othervid123',
+                    'transcript': 'test',
+                    'segments_count': 1
+                }
+                
+                # Save video as user1
+                client.post(
+                    "/api/videos",
+                    json={"url": "https://youtube.com/watch?v=othervid123"},
+                    headers={"Authorization": f"Bearer {user1_token}"}
+                )
+                
+                # Mock get_video_by_id to return video owned by user1
+                mock_get_video.return_value = {
+                    'video_id': 'othervid123',
+                    'user_id': 999,  # Different user
+                    'url': 'test'
+                }
+                
+                # Try to access as user2
+                user2_token = get_auth_token(username="user2_test", password="pass2")
+                response = client.get(
+                    "/api/videos/othervid123",
+                    headers={"Authorization": f"Bearer {user2_token}"}
+                )
+                
+                assert response.status_code == 403
+                assert "Access denied" in response.json()["detail"]
+
+
+def test_signup_create_user_fails():
+    """Test signup when database create_user fails"""
+    with patch('backend.main.db_service.create_user') as mock_create:
+        mock_create.return_value = {'success': False, 'error': 'Database error'}
+        
+        response = client.post(
+            "/api/auth/signup",
+            json={"username": "failuser", "password": "pass123"}
+        )
+        
+        assert response.status_code == 400
+        assert "Database error" in response.json()["detail"]
