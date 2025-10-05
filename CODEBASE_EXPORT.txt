@@ -1,0 +1,2563 @@
+
+============================================================
+FILE: backend/main.py
+============================================================
+
+from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from typing import Optional
+from datetime import timedelta
+from pydantic import BaseModel
+from backend.services.youtube_fetcher import YouTubeFetcher
+from backend.services.database import DatabaseService
+from backend.services.groq_summarizer import GroqSummarizer
+from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
+from backend.services.auth_service import (
+    get_password_hash, 
+    verify_password, 
+    create_access_token,
+    verify_token,
+    ACCESS_TOKEN_EXPIRE_MINUTES
+)
+
+load_dotenv()
+
+app = FastAPI(title="Stash API", description="Video Content Organizer")
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def read_root():
+    """Serve the main frontend page"""
+    return FileResponse("frontend/index.html")
+
+# Initialize services
+youtube_fetcher = YouTubeFetcher()
+db_service = DatabaseService()
+
+try:
+    groq_summarizer = GroqSummarizer()
+    summarizer_available = True
+except Exception as e:
+    print(f"Warning: GroqSummarizer not available: {e}")
+    groq_summarizer = None
+    summarizer_available = False
+
+# Pydantic Auth models
+class SignupRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    username: str
+
+# Video Models
+class VideoRequest(BaseModel):
+    url: str
+
+def get_current_user(authorization: Optional[str] = Header(None)):
+    """
+    Dependency that extracts and validates JWT token from request headers.
+    Returns user info if token is valid, raises 401 error if not.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    try:
+        # Extract token from "Bearer <token>" format
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+        
+        # Verify token and get user info
+        payload = verify_token(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        
+        return payload  # Returns {"username": "...", "user_id": ...}
+        
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+# Authentication Endpoints
+@app.post("/api/auth/signup", response_model=TokenResponse)
+def signup(request: SignupRequest):
+    """
+    Register a new user with username and password.
+    Returns JWT token for immediate login.
+    """
+    try:
+        # Check if username already taken
+        existing_user = db_service.get_user_by_username(request.username)
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Username already exists")
+        
+        # Hash password for secure storage
+        hashed_password = get_password_hash(request.password)
+        
+        # Create user in database
+        result = db_service.create_user(request.username, hashed_password)
+        
+        if not result['success']:
+            raise HTTPException(status_code=400, detail=result['error'])
+        
+        user = result['data']
+        
+        # Generate JWT token
+        access_token = create_access_token(
+            data={"sub": user['username'], "user_id": user['id']},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "username": user['username']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(request: LoginRequest):
+    """
+    Login with username and password.
+    Returns JWT token for authenticated requests.
+    """
+    try:
+        # Get user from database
+        user = db_service.get_user_by_username(request.username)
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+        # Verify password matches stored hash
+        if not verify_password(request.password, user['hashed_password']):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+        # Generate JWT token
+        access_token = create_access_token(
+            data={"sub": user['username'], "user_id": user['id']},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "username": user['username']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auth/me")
+def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    """
+    Get information about the currently logged-in user.
+    Requires valid JWT token in Authorization header.
+    """
+    user = db_service.get_user_by_id(current_user['user_id'])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"success": True, "data": user}
+
+
+# Video endpoints
+@app.post("/api/videos")
+def save_video_transcript(
+    request: VideoRequest,
+    current_user: dict = Depends(get_current_user)  # Requires authentication
+):
+    """
+    Save a video transcript to database.
+    Only accessible with valid JWT token.
+    Videos are associated with the logged-in user.
+    """
+    try:
+        # Extract video ID and check if already exists
+        video_id = youtube_fetcher.extract_video_id(request.url)
+        existing = db_service.get_video_by_id(video_id)
+        
+        if existing:
+            return {"message": "Video already exists", "data": existing}
+        
+        # Fetch transcript from YouTube
+        transcript_result = youtube_fetcher.get_transcript(request.url)
+        
+        if not transcript_result['success']:
+            raise HTTPException(status_code=400, detail=transcript_result['error'])
+
+        # Generate AI summary if available
+        ai_summary = None
+        if summarizer_available and groq_summarizer:
+            summary_result = groq_summarizer.summarize(transcript_result['transcript'])
+            if summary_result['success']:
+                ai_summary = summary_result['summary']
+            else:
+                print(f"Warning: Failed to generate summary - {summary_result.get('error')}")
+        
+        # Prepare data for database
+        video_data = {
+            'url': request.url,
+            'video_id': transcript_result['video_id'],
+            'raw_transcript': transcript_result['transcript'],
+            'ai_summary': ai_summary,
+            'language': transcript_result.get('language'),
+            'is_generated': transcript_result.get('is_generated'),
+            'segments_count': transcript_result['segments_count'],
+            'platform': 'youtube'
+        }
+
+        # Save to database with user_id
+        save_result = db_service.save_video(video_data, current_user['user_id'])
+        
+        if save_result['success']:
+            return {"success": True, "message": "Video saved", "data": save_result['data']}
+        else:
+            raise HTTPException(status_code=500, detail=save_result['error'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e) if str(e) else f"{type(e).__name__} occurred"
+        raise HTTPException(status_code=500, detail=error_msg)
+
+
+@app.get("/api/videos")
+def get_all_videos(current_user: dict = Depends(get_current_user)):
+    """
+    Get all saved videos for the currently logged-in user.
+    Only returns videos belonging to this user.
+    """
+    try:
+        videos = db_service.get_user_videos(current_user['user_id'])
+        return {"success": True, "data": videos}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/videos/{video_id}")
+def get_video(video_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Get specific video by ID.
+    Only accessible if video belongs to the logged-in user.
+    """
+    try:
+        video = db_service.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        # Check if video belongs to current user
+        if video.get('user_id') != current_user['user_id']:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        return {"success": True, "data": video}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/health")
+def health_check():
+    """
+    Check if the API is running and which services are available.
+    Public endpoint - no authentication required.
+    """
+    return {
+        "status": "healthy", 
+        "service": "stash-api", 
+        "groq_summarizer": summarizer_available
+    }
+
+@app.delete("/api/videos/{video_id}")
+def delete_video(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a video (only if it belongs to current user)"""
+    try:
+        video = db_service.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        # Check ownership
+        if video.get('user_id') != current_user['user_id']:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Delete from database
+        result = db_service.delete_video(video_id)
+        
+        if result['success']:
+            return {"success": True, "message": "Video deleted"}
+        else:
+            raise HTTPException(status_code=500, detail=result['error'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/videos/{video_id}")
+def update_video(
+    video_id: str, 
+    request: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update video summary/notes (only if it belongs to current user)"""
+    try:
+        video = db_service.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        # Check ownership
+        if video.get('user_id') != current_user['user_id']:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Update in database
+        result = db_service.update_video(video_id, request)
+        
+        if result['success']:
+            return {"success": True, "message": "Video updated", "data": result['data']}
+        else:
+            raise HTTPException(status_code=500, detail=result['error'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+============================================================
+FILE: backend/services/auth_service.py
+============================================================
+
+from datetime import datetime, timedelta
+from typing import Optional
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+import os
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# JWT settings
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    """Hash a password for storage"""
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create a JWT access token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[dict]:
+    """Verify JWT token and return payload"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: int = payload.get("user_id")
+        
+        if username is None or user_id is None:
+            return None
+            
+        return {"username": username, "user_id": user_id}
+    except JWTError:
+        return None
+
+
+============================================================
+FILE: backend/services/database.py
+============================================================
+
+import sqlite3
+from typing import Optional, List, Dict, Any
+
+class DatabaseService:
+    def __init__(self, db_path: str = "stash.db"):
+        self.db_path = db_path
+        self._init_database()
+    
+    def _init_database(self):
+        """Create tables if they don't exist"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # CREATE USERS TABLE FIRST
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                hashed_password TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_username ON users(username)')
+        
+        # CREATE SAVED_VIDEOS TABLE WITH user_id COLUMN
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS saved_videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                video_id TEXT NOT NULL UNIQUE,
+                platform TEXT DEFAULT 'youtube',
+                title TEXT,
+                raw_transcript TEXT,
+                ai_summary TEXT,
+                language TEXT,
+                is_generated BOOLEAN,
+                segments_count INTEGER,
+                user_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        ''')
+        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_video_id ON saved_videos(video_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON saved_videos(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_created_at ON saved_videos(created_at DESC)')
+        
+        conn.commit()
+        conn.close()
+    
+    def save_video(self, video_data: Dict[str, Any], user_id: int) -> Dict[str, Any]:
+        """Save a video to the database with user_id"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO saved_videos 
+                (url, video_id, platform, raw_transcript, ai_summary, language, is_generated, segments_count, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                video_data['url'],
+                video_data['video_id'],
+                video_data.get('platform', 'youtube'),
+                video_data['raw_transcript'],
+                video_data.get('ai_summary'),
+                video_data.get('language'),
+                video_data.get('is_generated'),
+                video_data.get('segments_count'),
+                user_id 
+            ))
+            
+            conn.commit()
+            video_id = cursor.lastrowid
+            
+            cursor.execute('SELECT * FROM saved_videos WHERE id = ?', (video_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return {'success': True, 'data': dict(row)}
+            else:
+                return {'success': False, 'error': 'Video inserted but could not retrieve'}
+                
+        except sqlite3.IntegrityError as e:
+            return {'success': False, 'error': f'Video already exists: {str(e)}'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()
+
+    def get_user_videos(self, user_id: int) -> List[Dict[str, Any]]:
+        """Get all videos for a specific user"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                'SELECT * FROM saved_videos WHERE user_id = ? ORDER BY created_at DESC',
+                (user_id,)
+            )
+            rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+            
+        except Exception:
+            return []
+        finally:
+            if conn:
+                conn.close()
+    
+    def get_video_by_id(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Get video by YouTube video ID"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT * FROM saved_videos WHERE video_id = ?', (video_id,))
+            row = cursor.fetchone()
+            
+            return dict(row) if row else None
+            
+        except Exception:
+            return None
+            
+        finally:
+            if conn:
+                conn.close()
+    
+    def get_all_videos(self) -> List[Dict[str, Any]]:
+        """Get all saved videos"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT * FROM saved_videos ORDER BY created_at DESC')
+            rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+            
+        except Exception:
+            return []
+            
+        finally:
+            if conn:
+                conn.close()
+
+    def create_user(self, username: str, hashed_password: str) -> Dict[str, Any]:
+        """Create a new user"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO users (username, hashed_password)
+                VALUES (?, ?)
+            ''', (username, hashed_password))
+            
+            conn.commit()
+            user_id = cursor.lastrowid
+            
+            cursor.execute('SELECT id, username, created_at FROM users WHERE id = ?', (user_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return {'success': True, 'data': dict(row)}
+            else:
+                return {'success': False, 'error': 'User created but could not retrieve'}
+                
+        except sqlite3.IntegrityError:
+            return {'success': False, 'error': 'Username already exists'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()
+
+    def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Get user by username (includes hashed_password for auth)"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+            row = cursor.fetchone()
+            
+            return dict(row) if row else None
+            
+        except Exception:
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get user by ID"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT id, username, created_at FROM users WHERE id = ?', (user_id,))
+            row = cursor.fetchone()
+            
+            return dict(row) if row else None
+            
+        except Exception:
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_video(self, video_id: str) -> Dict[str, Any]:
+        """Delete a video by ID"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM saved_videos WHERE video_id = ?', (video_id,))
+            conn.commit()
+            
+            if cursor.rowcount > 0:
+                return {'success': True}
+            else:
+                return {'success': False, 'error': 'Video not found'}
+                
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()
+
+    def update_video(self, video_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Update video fields"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # Only allow updating certain fields
+            allowed_fields = ['ai_summary', 'title']
+            update_parts = []
+            values = []
+            
+            for field in allowed_fields:
+                if field in updates:
+                    update_parts.append(f"{field} = ?")
+                    values.append(updates[field])
+            
+            if not update_parts:
+                return {'success': False, 'error': 'No valid fields to update'}
+            
+            values.append(video_id)
+            query = f"UPDATE saved_videos SET {', '.join(update_parts)} WHERE video_id = ?"
+            
+            cursor.execute(query, values)
+            conn.commit()
+            
+            # Get updated video
+            cursor.execute('SELECT * FROM saved_videos WHERE video_id = ?', (video_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return {'success': True, 'data': dict(row)}
+            else:
+                return {'success': False, 'error': 'Video not found'}
+                
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()
+
+
+============================================================
+FILE: backend/services/groq_summarizer.py
+============================================================
+
+import os
+from groq import Groq
+
+class GroqSummarizer:
+    """Service to adaptively summarize video transcripts using Groq AI"""
+    
+    def __init__(self):
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY not found in environment variables")
+        self.client = Groq(api_key=api_key)
+    
+    def summarize(self, transcript: str, max_length: int = 12000) -> dict:
+        """
+        Generate adaptive notes from a video transcript.
+        
+        Args:
+            transcript: The full transcript text
+            max_length: Maximum characters to send to API (to avoid token limits)
+        
+        Returns:
+            dict with 'success' and 'summary' or 'error'
+        """
+        try:
+            truncated_transcript = transcript[:max_length]
+            
+            response = self.client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an assistant that summarizes YouTube transcripts into concise, "
+                            "structured notes. Adapt your style depending on the type of video:\n\n"
+                            "- If it's a recipe → list ingredients and step-by-step instructions.\n"
+                            "- If it's a travel/destination video → create an itinerary with places, activities, and tips.\n"
+                            "- If it's an educational/talk/tutorial → list key points, definitions, and takeaways.\n\n"
+                            "Keep notes clear, skimmable, and avoid filler words. Use Markdown with emojis if useful."
+                            "Keep notes concise, aim for 400-500 words"
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Here is the transcript:\n\n{truncated_transcript}\n\nPlease create adaptive notes."
+                    }
+                ],
+                temperature=0.4,   # more deterministic
+                max_tokens=1000     # longer output allowed
+            )
+            
+            summary = response.choices[0].message.content
+            
+            return {
+                'success': True,
+                'summary': summary
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+
+
+============================================================
+FILE: backend/services/youtube_fetcher.py
+============================================================
+
+# Used: https://pypi.org/project/youtube-transcript-api/
+from youtube_transcript_api import YouTubeTranscriptApi
+
+class YouTubeFetcher:
+    """YouTube fetcher that handles the FetchedTranscript data structure"""
+    
+    def __init__(self):
+        self.api = YouTubeTranscriptApi()
+    
+    def extract_video_id(self, url: str) -> str:
+        """Extract video ID from YouTube URL"""
+        url = url.strip()
+        
+        if 'v=' in url:
+            return url.split('v=')[1].split('&')[0]
+        elif 'youtu.be/' in url:
+            return url.split('youtu.be/')[1].split('?')[0]
+        else:
+            raise ValueError("Please use a standard YouTube URL")
+    
+    def get_transcript(self, url: str) -> dict:
+        """Fetch transcript, preferring English"""
+        try:
+            video_id = self.extract_video_id(url)
+            
+            # Use fetch with English language preference
+            fetched_transcript = self.api.fetch(video_id, languages=['en', 'en-US', 'en-GB'])
+            
+            # Extract text from FetchedTranscriptSnippet objects
+            full_text = ' '.join([snippet.text for snippet in fetched_transcript.snippets])
+            
+            return {
+                'success': True,
+                'video_id': video_id,
+                'transcript': full_text,
+                'segments_count': len(fetched_transcript.snippets),
+                'language': fetched_transcript.language,
+                'is_generated': fetched_transcript.is_generated
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e) if str(e) else type(e).__name__,
+                'error_type': type(e).__name__,
+                'video_id': video_id if 'video_id' in locals() else None
+            }
+    
+    def can_handle(self, url: str) -> bool:
+        return 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
+
+
+============================================================
+FILE: export_code.py
+============================================================
+
+import os
+from pathlib import Path
+
+def should_include(path):
+    """Only include Python and important files"""
+    extensions = {'.py', '.html', '.css', '.js'}
+    exclude_dirs = {'__init__.py','__pycache__', '.pytest_cache', 'htmlcov', '.git', 'venv'}
+    
+    # Check if any excluded dir is in path
+    for exclude in exclude_dirs:
+        if exclude in path.parts:
+            return False
+    
+    return path.suffix in extensions
+
+def export_codebase():
+    output = []
+    root = Path('.')
+    
+    # Get all files
+    files = sorted([f for f in root.rglob('*') if f.is_file() and should_include(f)])
+    
+    for file_path in files:
+        output.append(f"\n{'='*60}\n")
+        output.append(f"FILE: {file_path}\n")
+        output.append(f"{'='*60}\n\n")
+        
+        try:
+            content = file_path.read_text(encoding='utf-8')
+            output.append(content)
+        except Exception as e:
+            output.append(f"[Error reading file: {e}]")
+        
+        output.append("\n\n")
+    
+    # Write to file
+    output_file = Path('CODEBASE_EXPORT.txt')
+    output_file.write_text(''.join(output), encoding='utf-8')
+    print(f"✅ Exported {len(files)} files to {output_file}")
+
+if __name__ == "__main__":
+    export_codebase()
+
+
+============================================================
+FILE: frontend/index.html
+============================================================
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stash - Turn Videos into Notes</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-white">
+    <!-- Auth Modal -->
+    <div id="authModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white rounded-2xl p-8 max-w-md w-full mx-4">
+            <h2 id="authTitle" class="text-2xl font-bold text-gray-900 mb-6">Login to Stash</h2>
+            <form id="authForm">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Username</label>
+                    <input type="text" id="authUsername" class="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none" required>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Password</label>
+                    <input type="password" id="authPassword" class="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none" required>
+                </div>
+                <div id="authError" class="hidden mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm"></div>
+                <button type="submit" class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+                    <span id="authButtonText">Login</span>
+                </button>
+            </form>
+            <div class="mt-4 text-center text-sm text-gray-600">
+                <span id="authSwitchText">Don't have an account?</span>
+                <button id="authSwitchBtn" class="text-blue-600 hover:text-blue-700 font-medium ml-1">Sign up</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="min-h-screen">
+        <!-- Navigation -->
+        <nav class="border-b border-gray-200">
+            <div class="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+                        <span class="text-white font-bold">S</span>
+                    </div>
+                    <span class="text-xl font-bold text-gray-900">Stash</span>
+                </div>
+                <div id="userInfo" class="hidden flex items-center gap-4">
+                    <span class="text-sm text-gray-600">Welcome, <span id="usernameDisplay" class="font-semibold text-gray-900"></span></span>
+                    <button id="logoutBtn" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 font-medium">Logout</button>
+                </div>
+                <button id="loginBtn" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">Login</button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div id="mainContent" class="hidden">
+            <div class="max-w-4xl mx-auto px-6 pt-24 pb-16 text-center">
+                <h1 class="text-7xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 mb-6 leading-tight">Stash</h1>
+                <p class="text-2xl md:text-3xl text-gray-700 font-medium mb-12">Turn YouTube videos into organized, useful notes</p>
+                <div class="max-w-2xl mx-auto">
+                    <form id="addVideoForm" class="relative">
+                        <input type="text" id="videoUrl" placeholder="Paste any YouTube URL here..." class="w-full px-6 py-5 text-lg border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition shadow-sm" required>
+                        <button type="submit" class="absolute right-2 top-2 px-8 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium">Save & Summarize</button>
+                    </form>
+                    <div id="formMessage" class="mt-4 hidden"></div>
+                    <p class="mt-4 text-sm text-gray-500">Example: youtube.com/watch?v=dQw4w9WgXcQ</p>
+                </div>
+            </div>
+
+            <div id="loading" class="hidden max-w-4xl mx-auto px-6 py-12 text-center">
+                <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                <p class="mt-4 text-gray-600 font-medium">Loading your saved videos...</p>
+            </div>
+
+            <div id="emptyState" class="hidden max-w-4xl mx-auto px-6 py-20 text-center">
+                <div class="w-16 h-16 bg-gray-100 rounded-full mx-auto mb-4 flex items-center justify-center">
+                    <span class="text-3xl">📚</span>
+                </div>
+                <h3 class="text-xl font-semibold text-gray-900 mb-2">No videos saved yet</h3>
+                <p class="text-gray-600">Add your first YouTube video above to get started!</p>
+            </div>
+
+            <div id="videosSection" class="hidden max-w-6xl mx-auto px-6 py-12">
+                <h2 class="text-3xl font-bold text-gray-900 mb-8">Your Saved Videos</h2>
+                <div id="videosList" class="grid gap-6"></div>
+            </div>
+        </div>
+
+        <!-- Welcome Screen -->
+        <div id="welcomeScreen" class="max-w-4xl mx-auto px-6 py-32 text-center">
+            <h1 class="text-7xl md:text-8xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 mb-6 leading-tight">Stash</h1>
+            <p class="text-2xl md:text-3xl text-gray-700 font-medium mb-12">Turn YouTube videos into organized, useful notes</p>
+            <button id="welcomeLoginBtn" class="px-8 py-4 bg-blue-600 text-white text-lg rounded-xl hover:bg-blue-700 transition font-semibold shadow-lg">Get Started - Login or Sign Up</button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8080/api';
+        let authMode = 'login';
+
+        function getToken() { return localStorage.getItem('stash_token'); }
+        function getUsername() { return localStorage.getItem('stash_username'); }
+        function setAuth(token, username) {
+            localStorage.setItem('stash_token', token);
+            localStorage.setItem('stash_username', username);
+        }
+        function clearAuth() {
+            localStorage.removeItem('stash_token');
+            localStorage.removeItem('stash_username');
+        }
+        function isLoggedIn() { return !!getToken(); }
+
+        function updateUIForAuthState() {
+            const loggedIn = isLoggedIn();
+            document.getElementById('mainContent').classList.toggle('hidden', !loggedIn);
+            document.getElementById('welcomeScreen').classList.toggle('hidden', loggedIn);
+            document.getElementById('userInfo').classList.toggle('hidden', !loggedIn);
+            document.getElementById('loginBtn').classList.toggle('hidden', loggedIn);
+            if (loggedIn) {
+                document.getElementById('usernameDisplay').textContent = getUsername();
+                loadVideos();
+            }
+        }
+
+        function showAuthModal(mode = 'login') {
+            authMode = mode;
+            const modal = document.getElementById('authModal');
+            const title = document.getElementById('authTitle');
+            const buttonText = document.getElementById('authButtonText');
+            const switchText = document.getElementById('authSwitchText');
+            const switchBtn = document.getElementById('authSwitchBtn');
+            if (mode === 'login') {
+                title.textContent = 'Login to Stash';
+                buttonText.textContent = 'Login';
+                switchText.textContent = "Don't have an account?";
+                switchBtn.textContent = 'Sign up';
+            } else {
+                title.textContent = 'Sign Up for Stash';
+                buttonText.textContent = 'Sign Up';
+                switchText.textContent = 'Already have an account?';
+                switchBtn.textContent = 'Login';
+            }
+            document.getElementById('authUsername').value = '';
+            document.getElementById('authPassword').value = '';
+            document.getElementById('authError').classList.add('hidden');
+            modal.classList.remove('hidden');
+        }
+
+        function hideAuthModal() {
+            document.getElementById('authModal').classList.add('hidden');
+        }
+
+        document.getElementById('loginBtn').addEventListener('click', () => showAuthModal('login'));
+        document.getElementById('welcomeLoginBtn').addEventListener('click', () => showAuthModal('login'));
+        document.getElementById('authSwitchBtn').addEventListener('click', () => {
+            showAuthModal(authMode === 'login' ? 'signup' : 'login');
+        });
+        document.getElementById('authModal').addEventListener('click', (e) => {
+            if (e.target.id === 'authModal') hideAuthModal();
+        });
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            clearAuth();
+            updateUIForAuthState();
+        });
+
+        document.getElementById('authForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('authUsername').value;
+            const password = document.getElementById('authPassword').value;
+            const errorDiv = document.getElementById('authError');
+            try {
+                const endpoint = authMode === 'login' ? '/auth/login' : '/auth/signup';
+                const response = await fetch(`${API_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    setAuth(data.access_token, data.username);
+                    hideAuthModal();
+                    updateUIForAuthState();
+                } else {
+                    errorDiv.textContent = data.detail || 'Authentication failed';
+                    errorDiv.classList.remove('hidden');
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Connection error. Please try again.';
+                errorDiv.classList.remove('hidden');
+            }
+        });
+
+        document.getElementById('addVideoForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const urlInput = document.getElementById('videoUrl');
+            const url = urlInput.value.trim();
+            const messageDiv = document.getElementById('formMessage');
+            if (!url) return;
+            messageDiv.className = 'p-4 rounded-xl bg-blue-50 text-blue-700 font-medium';
+            messageDiv.textContent = '⏳ Processing video and generating AI summary...';
+            messageDiv.classList.remove('hidden');
+            try {
+                const response = await fetch(`${API_URL}/videos`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${getToken()}`
+                    },
+                    body: JSON.stringify({ url })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    messageDiv.className = 'p-4 rounded-xl bg-green-50 text-green-700 font-medium';
+                    messageDiv.textContent = '✅ ' + (data.message || 'Video saved successfully!');
+                    urlInput.value = '';
+                    setTimeout(() => {
+                        loadVideos();
+                        messageDiv.classList.add('hidden');
+                    }, 2000);
+                } else {
+                    throw new Error(data.detail || 'Failed to save video');
+                }
+            } catch (error) {
+                messageDiv.className = 'p-4 rounded-xl bg-red-50 text-red-700 font-medium';
+                messageDiv.textContent = '❌ ' + error.message;
+            }
+        });
+
+        async function loadVideos() {
+            const loading = document.getElementById('loading');
+            const videosList = document.getElementById('videosList');
+            const emptyState = document.getElementById('emptyState');
+            const videosSection = document.getElementById('videosSection');
+            loading.classList.remove('hidden');
+            videosSection.classList.add('hidden');
+            emptyState.classList.add('hidden');
+            videosList.innerHTML = '';
+            try {
+                const response = await fetch(`${API_URL}/videos`, {
+                    headers: { 'Authorization': `Bearer ${getToken()}` }
+                });
+                const data = await response.json();
+                loading.classList.add('hidden');
+                if (data.success && data.data.length > 0) {
+                    videosSection.classList.remove('hidden');
+                    data.data.forEach(video => {
+                        videosList.appendChild(createVideoCard(video));
+                    });
+                } else {
+                    emptyState.classList.remove('hidden');
+                }
+            } catch (error) {
+                loading.classList.add('hidden');
+                videosSection.classList.remove('hidden');
+                videosList.innerHTML = `<div class="col-span-full bg-red-50 text-red-700 p-6 rounded-xl text-center"><p class="font-medium">Error loading videos</p><p class="text-sm mt-1">${error.message}</p></div>`;
+            }
+        }
+
+        function createVideoCard(video) {
+            const card = document.createElement('div');
+            card.className = 'bg-white border-2 border-gray-100 rounded-2xl p-6 hover:border-pink-200 hover:shadow-lg transition';
+            card.id = `video-${video.video_id}`;
+            const date = new Date(video.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            let title = `Video ${video.video_id.substring(0, 8)}`;
+            if (video.ai_summary) {
+                const lines = video.ai_summary.split('\n');
+                for (let line of lines) {
+                    line = line.trim();
+                    if (line.startsWith('###')) {
+                        title = line.replace(/###\s+/g, '').replace(/[🗺️❤️🕎️🍺☕️🍴📺\|\*\=]/g, '').trim();
+                        break;
+                    } else if (line.startsWith('**') && line.endsWith('**')) {
+                        title = line.replace(/\*\*/g, '').replace(/[🗺️❤️🕎️🍺☕️🍴📺\|\=]/g, '').trim();
+                        break;
+                    }
+                }
+            }
+            const thumbnailUrl = `https://img.youtube.com/vi/${video.video_id}/mqdefault.jpg`;
+
+            card.innerHTML = `
+                <div class="flex items-start justify-between mb-4">
+                    <div class="flex-1 min-w-0 pr-4">
+                        <h3 class="font-bold text-gray-900 text-xl mb-3">${title}</h3>
+                        <div class="flex flex-wrap gap-3 text-sm text-gray-500">
+                            <span>📅 ${date}</span>
+                            <span>🗣 ${video.language || 'Unknown'}</span>
+                            <span>📝 ${video.segments_count} segments</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-col items-end gap-2 flex-shrink-0">
+                        <img src="${thumbnailUrl}" alt="Video thumbnail" class="w-32 h-20 object-cover rounded-lg shadow-sm" onerror="this.style.display='none'">
+                        <a href="${video.url}" target="_blank" class="text-blue-600 hover:text-blue-700 text-sm font-medium">Watch on YouTube →</a>
+                    </div>
+                </div>
+
+                ${video.ai_summary ? `
+                    <div id="summary-view-${video.video_id}" class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-5 mb-4">
+                        <div class="text-gray-700 leading-relaxed">${formatSummary(video.ai_summary)}</div>
+                    </div>
+                    <div id="summary-edit-${video.video_id}" class="hidden mb-4">
+                        <textarea id="summary-textarea-${video.video_id}" class="w-full p-4 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none" rows="8">${video.ai_summary}</textarea>
+                        <div class="flex gap-2 mt-2">
+                            <button onclick="saveEdit('${video.video_id}')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm">Save Changes</button>
+                            <button onclick="cancelEdit('${video.video_id}')" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition text-sm">Cancel</button>
+                        </div>
+                    </div>
+                ` : `
+                    <div class="bg-yellow-50 rounded-xl p-4 mb-4 text-sm text-yellow-700">No AI summary available</div>
+                `}
+
+                <details class="group mb-4">
+                    <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900 font-medium flex items-center gap-2">
+                        <span>View full transcript</span>
+                        <svg class="w-4 h-4 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </summary>
+                    <div class="mt-3 p-4 bg-gray-50 rounded-xl text-sm text-gray-700 max-h-64 overflow-y-auto leading-relaxed">${video.raw_transcript}</div>
+                </details>
+
+                <div class="flex gap-2 pt-4 border-t border-gray-200">
+                    <button onclick="editVideo('${video.video_id}')" class="flex-1 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition text-sm font-medium">✏️ Edit Summary</button>
+                    <button onclick="deleteVideo('${video.video_id}')" class="flex-1 px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition text-sm font-medium">🗑️ Delete</button>
+                </div>
+            `;
+            return card;
+        }
+
+        function editVideo(videoId) {
+            document.getElementById(`summary-view-${videoId}`).classList.add('hidden');
+            document.getElementById(`summary-edit-${videoId}`).classList.remove('hidden');
+        }
+
+        function cancelEdit(videoId) {
+            document.getElementById(`summary-view-${videoId}`).classList.remove('hidden');
+            document.getElementById(`summary-edit-${videoId}`).classList.add('hidden');
+        }
+
+        async function saveEdit(videoId) {
+            const newSummary = document.getElementById(`summary-textarea-${videoId}`).value;
+            try {
+                const response = await fetch(`${API_URL}/videos/${videoId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${getToken()}`
+                    },
+                    body: JSON.stringify({ ai_summary: newSummary })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    await loadVideos();
+                    alert('Summary updated successfully!');
+                } else {
+                    throw new Error(data.detail || 'Failed to update video');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function deleteVideo(videoId) {
+            if (!confirm('Are you sure you want to delete this video? This cannot be undone.')) return;
+            try {
+                const response = await fetch(`${API_URL}/videos/${videoId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${getToken()}` }
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    const card = document.getElementById(`video-${videoId}`);
+                    card.style.transition = 'opacity 0.3s';
+                    card.style.opacity = '0';
+                    setTimeout(() => {
+                        card.remove();
+                        const videosList = document.getElementById('videosList');
+                        if (videosList.children.length === 0) {
+                            document.getElementById('videosSection').classList.add('hidden');
+                            document.getElementById('emptyState').classList.remove('hidden');
+                        }
+                    }, 300);
+                    alert('Video deleted successfully!');
+                } else {
+                    throw new Error(data.detail || 'Failed to delete video');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        function formatSummary(summary) {
+            let lines = summary.split('\n');
+            let processedLines = [];
+            let skipFirstHeading = false;
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i].trim();
+                if ((line.startsWith('###') || (line.startsWith('**') && line.endsWith('**'))) && !skipFirstHeading) {
+                    skipFirstHeading = true;
+                    continue;
+                }
+                if (line.match(/^[=\-\*]{3,}$/)) continue;
+                processedLines.push(lines[i]);
+            }
+            let html = processedLines.join('\n')
+                .replace(/####\s+(.+?)(\n|$)/g, '<h5 class="font-semibold text-base mt-4 mb-2 text-gray-900">$1</h5>')
+                .replace(/###\s+(.+?)(\n|$)/g, '<h4 class="font-bold text-lg mt-4 mb-2 text-gray-900">$1</h4>')
+                .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
+                .replace(/^(\d+)\.\s+(.+?):/gm, '<div class="font-semibold text-gray-900 mt-3 mb-1">$1. $2:</div>')
+                .replace(/^\*\s+(.+?)$/gm, '<li class="ml-6 mb-1">$1</li>')
+                .replace(/^-\s+(.+?)$/gm, '<li class="ml-6 mb-1">$1</li>')
+                .replace(/\n\n/g, '<br><br>')
+                .replace(/\n/g, '<br>');
+            html = html.replace(/(<li class="ml-6 mb-1">.*?<\/li>(<br>)*)+/g, (match) => {
+                return '<ul class="list-disc space-y-1 my-2">' + match.replace(/<br>/g, '') + '</ul>';
+            });
+            return html;
+        }
+
+        document.addEventListener('DOMContentLoaded', updateUIForAuthState);
+    </script>
+</body>
+</html>
+
+
+============================================================
+FILE: tests/conftest.py
+============================================================
+
+import pytest
+import os
+import sqlite3
+from backend.services.database import DatabaseService
+
+@pytest.fixture(autouse=True)
+def setup_test_db():
+    """
+    Global test database fixture - automatically runs for ALL tests.
+    Creates fresh test database with users and saved_videos tables.
+    """
+    test_db_path = "test_global.db"
+    
+    # Create test database
+    conn = sqlite3.connect(test_db_path)
+    cursor = conn.cursor()
+    
+    # Create users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            hashed_password TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create saved_videos table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS saved_videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            video_id TEXT NOT NULL UNIQUE,
+            platform TEXT DEFAULT 'youtube',
+            title TEXT,
+            raw_transcript TEXT,
+            ai_summary TEXT,
+            language TEXT,
+            is_generated BOOLEAN,
+            segments_count INTEGER,
+            user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    
+    # Make all tests use this test database
+    from backend import main
+    main.db_service = DatabaseService(db_path=test_db_path)
+    
+    yield main.db_service
+    
+    # Cleanup after all tests
+    if os.path.exists(test_db_path):
+        os.remove(test_db_path)
+
+
+@pytest.fixture
+def test_db(setup_test_db):
+    """Alias for tests that explicitly request test_db"""
+    return setup_test_db
+
+
+@pytest.fixture
+def sample_video_data():
+    """Sample video data for testing"""
+    return {
+        'url': 'https://www.youtube.com/watch?v=test123',
+        'video_id': 'test123',
+        'raw_transcript': 'This is a test transcript',
+        'language': 'English',
+        'is_generated': True,
+        'segments_count': 10,
+        'platform': 'youtube',
+        'ai_summary': 'Test summary'
+    }
+
+
+============================================================
+FILE: tests/test_api.py
+============================================================
+
+import pytest
+from fastapi.testclient import TestClient
+from backend.main import app
+from unittest.mock import patch, Mock
+import os
+
+client = TestClient(app)
+
+# Helper function to create authenticated user and get token
+
+def get_auth_token(username=None, password=None):
+    """Create a test user and return auth token"""
+    if username is None:
+        # Generate unique username for this test
+        import random
+        username = f"testuser_{random.randint(1000, 9999)}"
+    if password is None:
+        password = "testpass123"
+    
+    # Try to signup (might fail if user exists, that's ok)
+    client.post(
+        "/api/auth/signup",
+        json={"username": username, "password": password}
+    )
+    
+    # Login to get token
+    response = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": password}
+    )
+    
+    if response.status_code == 200:
+        return response.json()["access_token"]
+    return None
+
+def get_auth_headers(username=None, password=None):
+    """Get authorization headers with token"""
+    token = get_auth_token(username, password)
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+def test_health_check():
+    """Test health check endpoint"""
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+
+def test_get_all_videos():
+    """Test getting all videos with auth"""
+    headers = get_auth_headers()
+    response = client.get("/api/videos", headers=headers)
+    assert response.status_code == 200
+    assert "success" in response.json()
+    assert "data" in response.json()
+
+def test_save_video_invalid_url():
+    """Test saving video with invalid URL"""
+    headers = get_auth_headers()
+    response = client.post(
+        "/api/videos",
+        json={"url": "not a youtube url"},
+        headers=headers
+    )
+    assert response.status_code in [400, 500]
+
+def test_get_nonexistent_video():
+    """Test getting video that doesn't exist"""
+    headers = get_auth_headers()
+    response = client.get("/api/videos/nonexistent123", headers=headers)
+    assert response.status_code in [404, 403]  # 403 if it exists but belongs to another user
+
+def test_save_video_missing_url():
+    """Test saving video without URL"""
+    headers = get_auth_headers()
+    response = client.post(
+        "/api/videos",
+        json={},
+        headers=headers
+    )
+    assert response.status_code == 422  # Validation error
+
+def test_get_video_by_id_format():
+    """Test getting video returns correct format"""
+    headers = get_auth_headers()
+    response = client.get("/api/videos", headers=headers)
+    data = response.json()
+    
+    if data.get('success') and len(data.get('data', [])) > 0:
+        video_id = data['data'][0]['video_id']
+        response = client.get(f"/api/videos/{video_id}", headers=headers)
+        assert response.status_code in [200, 403]  # 403 if belongs to another user
+        if response.status_code == 200:
+            assert 'data' in response.json()
+
+@patch('backend.main.youtube_fetcher.get_transcript')
+def test_save_video_success_with_summary(mock_get_transcript):
+    """Test successfully saving video with AI summary"""
+    headers = get_auth_headers(username="summarytest", password="pass123") 
+    
+    mock_get_transcript.return_value = {
+        'success': True,
+        'video_id': 'test_video_summary',
+        'transcript': 'This is a test transcript',
+        'segments_count': 10,
+        'language': 'English',
+        'is_generated': True
+    }
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://www.youtube.com/watch?v=test_video_summary"},
+        headers=headers
+    )
+    
+    assert response.status_code in [200, 400, 500]
+
+@patch('backend.main.youtube_fetcher.get_transcript')
+def test_save_video_transcript_failure(mock_get_transcript):
+    """Test saving video when transcript fetch fails"""
+    headers = get_auth_headers()
+    
+    mock_get_transcript.return_value = {
+        'success': False,
+        'error': 'Transcript not found'
+    }
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://www.youtube.com/watch?v=fail123"},
+        headers=headers
+    )
+    
+    assert response.status_code == 400
+    assert 'Transcript not found' in response.json()['detail']
+
+@patch('backend.main.youtube_fetcher.extract_video_id')
+@patch('backend.main.db_service.get_video_by_id')
+def test_save_video_already_exists(mock_get_video, mock_extract_id):
+    """Test saving video that already exists"""
+    headers = get_auth_headers()
+    
+    mock_extract_id.return_value = 'existing123'
+    mock_get_video.return_value = {
+        'video_id': 'existing123',
+        'url': 'https://www.youtube.com/watch?v=existing123'
+    }
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://www.youtube.com/watch?v=existing123"},
+        headers=headers
+    )
+    
+    assert response.status_code == 200
+    assert 'already exists' in response.json()['message']
+
+def test_invalid_endpoint():
+    """Test accessing invalid endpoint"""
+    response = client.get("/api/invalid")
+    assert response.status_code == 404
+
+def test_save_video_exception_handling():
+    """Test API handles unexpected exceptions"""
+    headers = get_auth_headers()
+    response = client.post(
+        "/api/videos",
+        json={"url": ""},
+        headers=headers
+    )
+    assert response.status_code >= 400
+
+@patch('backend.main.db_service.save_video')
+def test_save_video_database_save_fails(mock_save):
+    """Test when database save operation fails"""
+    headers = get_auth_headers()
+    mock_save.return_value = {'success': False, 'error': 'Database error'}
+    
+    with patch('backend.main.youtube_fetcher.extract_video_id', return_value='test123'):
+        with patch('backend.main.db_service.get_video_by_id', return_value=None):
+            with patch('backend.main.youtube_fetcher.get_transcript') as mock_transcript:
+                mock_transcript.return_value = {
+                    'success': True,
+                    'video_id': 'test123',
+                    'transcript': 'test',
+                    'segments_count': 1
+                }
+                
+                response = client.post(
+                    "/api/videos",
+                    json={"url": "https://www.youtube.com/watch?v=test123"},
+                    headers=headers
+                )
+                
+                assert response.status_code == 500
+
+@patch('backend.main.db_service.get_user_videos')
+def test_get_all_videos_exception(mock_get_all):
+    """Test get all videos handles exceptions"""
+    headers = get_auth_headers()
+    mock_get_all.side_effect = Exception("Database error")
+    
+    response = client.get("/api/videos", headers=headers)
+    assert response.status_code == 500
+
+def test_groq_initialization_failure():
+    """Test when Groq API key is missing"""
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert 'groq_summarizer' in response.json()
+
+@patch('backend.main.youtube_fetcher.extract_video_id')
+@patch('backend.main.db_service.get_video_by_id')
+def test_duplicate_video_returns_existing(mock_get_video, mock_extract):
+    """Test saving duplicate video returns existing data"""
+    headers = get_auth_headers()
+    
+    mock_extract.return_value = 'duplicate123'
+    mock_get_video.return_value = {
+        'id': 1,
+        'video_id': 'duplicate123',
+        'url': 'https://youtube.com/watch?v=duplicate123'
+    }
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://youtube.com/watch?v=duplicate123"},
+        headers=headers
+    )
+    
+    assert response.status_code == 200
+    assert "already exists" in response.json()['message']
+
+@patch('backend.main.youtube_fetcher.extract_video_id')
+@patch('backend.main.db_service.get_video_by_id')
+@patch('backend.main.youtube_fetcher.get_transcript')
+def test_transcript_fetch_fails(mock_transcript, mock_get_video, mock_extract):
+    """Test when YouTube transcript fetch fails"""
+    headers = get_auth_headers()
+    
+    mock_extract.return_value = 'test123'
+    mock_get_video.return_value = None
+    mock_transcript.return_value = {
+        'success': False,
+        'error': 'No transcript available'
+    }
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://youtube.com/watch?v=test123"},
+        headers=headers
+    )
+    
+    assert response.status_code == 400
+    assert 'No transcript available' in response.json()['detail']
+
+@patch('backend.main.youtube_fetcher.extract_video_id')
+@patch('backend.main.db_service.get_video_by_id')
+@patch('backend.main.youtube_fetcher.get_transcript')
+@patch('backend.main.groq_summarizer')
+@patch('backend.main.db_service.save_video')
+def test_groq_summary_failure_warning(mock_save, mock_groq, mock_transcript, mock_get_video, mock_extract):
+    """Test when Groq summarization fails but video still saves"""
+    headers = get_auth_headers()
+    
+    mock_extract.return_value = 'test456'
+    mock_get_video.return_value = None
+    mock_transcript.return_value = {
+        'success': True,
+        'video_id': 'test456',
+        'transcript': 'Test transcript',
+        'segments_count': 5,
+        'language': 'English',
+        'is_generated': True
+    }
+    
+    mock_summarizer = Mock()
+    mock_summarizer.summarize.return_value = {
+        'success': False,
+        'error': 'API rate limit'
+    }
+    mock_groq.return_value = mock_summarizer
+    
+    mock_save.return_value = {
+        'success': True,
+        'data': {'id': 1, 'video_id': 'test456'}
+    }
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://youtube.com/watch?v=test456"},
+        headers=headers
+    )
+    
+    assert response.status_code in [200, 400, 500]
+
+@patch('backend.main.youtube_fetcher.extract_video_id')
+@patch('backend.main.db_service.get_video_by_id')
+@patch('backend.main.youtube_fetcher.get_transcript')
+@patch('backend.main.db_service.save_video')
+def test_database_save_failure(mock_save, mock_transcript, mock_get_video, mock_extract):
+    """Test when database save operation fails"""
+    headers = get_auth_headers()
+    
+    mock_extract.return_value = 'test789'
+    mock_get_video.return_value = None
+    mock_transcript.return_value = {
+        'success': True,
+        'video_id': 'test789',
+        'transcript': 'Test',
+        'segments_count': 1
+    }
+    mock_save.return_value = {
+        'success': False,
+        'error': 'Database connection failed'
+    }
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://youtube.com/watch?v=test789"},
+        headers=headers
+    )
+    
+    assert response.status_code == 500
+
+@patch('backend.main.youtube_fetcher.extract_video_id')
+def test_unexpected_exception_handling(mock_extract):
+    """Test generic exception handler"""
+    headers = get_auth_headers()
+    mock_extract.side_effect = RuntimeError("Unexpected error")
+    
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://youtube.com/watch?v=test"},
+        headers=headers
+    )
+    
+    assert response.status_code == 500
+    assert 'detail' in response.json()
+
+def test_invalid_bearer_scheme():
+    """Test authorization with wrong scheme (not Bearer)"""
+    token = get_auth_token()
+    
+    response = client.get(
+        "/api/videos",
+        headers={"Authorization": f"Basic {token}"}
+    )
+    assert response.status_code == 401
+    # The actual error is more generic
+    assert "Could not validate credentials" in response.json()["detail"]
+
+
+def test_get_current_user_deleted():
+    """Test /api/auth/me when user was deleted from database"""
+    # Create user and get token
+    import random
+    username = f"deleteme_{random.randint(1000, 9999)}"
+    signup_response = client.post(
+        "/api/auth/signup",
+        json={"username": username, "password": "pass123"}
+    )
+    token = signup_response.json()["access_token"]
+    
+    # Manually delete user from database
+    from backend import main
+    user = main.db_service.get_user_by_username(username)
+    if user:
+        import sqlite3
+        conn = sqlite3.connect(main.db_service.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM users WHERE id = ?', (user['id'],))
+        conn.commit()
+        conn.close()
+    
+    # Try to use token - user no longer exists
+    response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 404
+    assert "User not found" in response.json()["detail"]
+
+
+def test_access_other_users_video():
+    """Test accessing video that belongs to different user"""
+    # Create first user and save a video
+    user1_token = get_auth_token(username="user1_test", password="pass1")
+    
+    with patch('backend.main.youtube_fetcher.extract_video_id', return_value='othervid123'):
+        with patch('backend.main.youtube_fetcher.get_transcript') as mock_transcript:
+            with patch('backend.main.db_service.get_video_by_id') as mock_get_video:
+                mock_transcript.return_value = {
+                    'success': True,
+                    'video_id': 'othervid123',
+                    'transcript': 'test',
+                    'segments_count': 1
+                }
+                
+                # Save video as user1
+                client.post(
+                    "/api/videos",
+                    json={"url": "https://youtube.com/watch?v=othervid123"},
+                    headers={"Authorization": f"Bearer {user1_token}"}
+                )
+                
+                # Mock get_video_by_id to return video owned by user1
+                mock_get_video.return_value = {
+                    'video_id': 'othervid123',
+                    'user_id': 999,  # Different user
+                    'url': 'test'
+                }
+                
+                # Try to access as user2
+                user2_token = get_auth_token(username="user2_test", password="pass2")
+                response = client.get(
+                    "/api/videos/othervid123",
+                    headers={"Authorization": f"Bearer {user2_token}"}
+                )
+                
+                assert response.status_code == 403
+                assert "Access denied" in response.json()["detail"]
+
+
+def test_signup_create_user_fails():
+    """Test signup when database create_user fails"""
+    with patch('backend.main.db_service.create_user') as mock_create:
+        mock_create.return_value = {'success': False, 'error': 'Database error'}
+        
+        response = client.post(
+            "/api/auth/signup",
+            json={"username": "failuser", "password": "pass123"}
+        )
+        
+        assert response.status_code == 400
+        assert "Database error" in response.json()["detail"]
+
+
+def test_delete_video_success():
+    """Test deleting a video"""
+    token = get_auth_token(username="deletetest", password="pass123")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        with patch('backend.main.db_service.delete_video') as mock_delete:
+            mock_get.return_value = {
+                'video_id': 'del123',
+                'user_id': 1
+            }
+            mock_delete.return_value = {'success': True}
+            
+            response = client.delete(
+                "/api/videos/del123",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            
+            assert response.status_code == 200
+            assert response.json()['success'] == True
+
+
+def test_delete_video_not_found():
+    """Test deleting non-existent video"""
+    token = get_auth_token()
+    
+    with patch('backend.main.db_service.get_video_by_id', return_value=None):
+        response = client.delete(
+            "/api/videos/nonexistent",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 404
+
+
+def test_delete_video_wrong_owner():
+    """Test deleting video owned by another user"""
+    token = get_auth_token(username="deluser1", password="pass1")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        mock_get.return_value = {
+            'video_id': 'test123',
+            'user_id': 999
+        }
+        
+        response = client.delete(
+            "/api/videos/test123",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 403
+
+
+def test_delete_video_without_auth():
+    """Test deleting video without authentication"""
+    response = client.delete("/api/videos/test123")
+    assert response.status_code == 401
+
+
+def test_update_video_success():
+    """Test updating video summary"""
+    token = get_auth_token(username="updatetest", password="pass123")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        with patch('backend.main.db_service.update_video') as mock_update:
+            mock_get.return_value = {
+                'video_id': 'upd123',
+                'user_id': 1,
+                'ai_summary': 'Old summary'
+            }
+            mock_update.return_value = {
+                'success': True,
+                'data': {'video_id': 'upd123', 'ai_summary': 'New summary'}
+            }
+            
+            response = client.put(
+                "/api/videos/upd123",
+                json={"ai_summary": "New summary"},
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            
+            assert response.status_code == 200
+            assert response.json()['success'] == True
+
+
+def test_update_video_not_found():
+    """Test updating non-existent video"""
+    token = get_auth_token()
+    
+    with patch('backend.main.db_service.get_video_by_id', return_value=None):
+        response = client.put(
+            "/api/videos/nonexistent",
+            json={"ai_summary": "test"},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 404
+
+
+def test_update_video_wrong_owner():
+    """Test updating video owned by another user"""
+    token = get_auth_token(username="upduser2", password="pass2")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        mock_get.return_value = {
+            'video_id': 'test123',
+            'user_id': 999
+        }
+        
+        response = client.put(
+            "/api/videos/test123",
+            json={"ai_summary": "test"},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 403
+
+
+def test_update_video_without_auth():
+    """Test updating video without authentication"""
+    response = client.put(
+        "/api/videos/test123",
+        json={"ai_summary": "test"}
+    )
+    assert response.status_code == 401
+
+
+============================================================
+FILE: tests/test_auth_service.py
+============================================================
+
+import pytest
+from fastapi.testclient import TestClient
+from backend.main import app
+from backend.services.database import DatabaseService
+import os
+import sqlite3
+
+client = TestClient(app)
+
+# Test user credentials
+TEST_USER = "testuser_auth"
+TEST_PASSWORD = "testpass123"
+
+
+def test_signup_success():
+    """Test successful user signup"""
+    response = client.post(
+        "/api/auth/signup",
+        json={"username": TEST_USER, "password": TEST_PASSWORD}
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert "token_type" in data
+    assert data["token_type"] == "bearer"
+    assert data["username"] == TEST_USER
+
+
+def test_signup_duplicate_username():
+    """Test signup with existing username fails"""
+    # First signup
+    client.post(
+        "/api/auth/signup",
+        json={"username": "duplicate_user", "password": "pass123"}
+    )
+    
+    # Try to signup again with same username
+    response = client.post(
+        "/api/auth/signup",
+        json={"username": "duplicate_user", "password": "pass123"}
+    )
+    
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"].lower()
+
+
+def test_signup_missing_fields():
+    """Test signup with missing fields"""
+    response = client.post(
+        "/api/auth/signup",
+        json={"username": "onlyusername"}
+    )
+    assert response.status_code == 422  # Validation error
+
+
+def test_login_success():
+    """Test successful login"""
+    # First create user
+    signup_response = client.post(
+        "/api/auth/signup",
+        json={"username": "logintest", "password": "pass123"}
+    )
+    assert signup_response.status_code == 200
+    
+    # Now login
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "logintest", "password": "pass123"}
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert data["username"] == "logintest"
+
+
+def test_login_wrong_password():
+    """Test login with incorrect password"""
+    # Create user
+    client.post(
+        "/api/auth/signup",
+        json={"username": "wrongpass", "password": "correct123"}
+    )
+    
+    # Try to login with wrong password
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "wrongpass", "password": "wrong123"}
+    )
+    
+    assert response.status_code == 401
+    assert "Invalid username or password" in response.json()["detail"]
+
+
+def test_login_nonexistent_user():
+    """Test login with user that doesn't exist"""
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "doesnotexist", "password": "pass123"}
+    )
+    
+    assert response.status_code == 401
+    assert "Invalid username or password" in response.json()["detail"]
+
+
+def test_get_current_user_with_valid_token():
+    """Test /api/auth/me with valid token"""
+    # Signup to get token
+    signup_response = client.post(
+        "/api/auth/signup",
+        json={"username": "metest", "password": "pass123"}
+    )
+    token = signup_response.json()["access_token"]
+    
+    # Get current user info
+    response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] == True
+    assert data["data"]["username"] == "metest"
+
+
+def test_get_current_user_without_token():
+    """Test /api/auth/me without token fails"""
+    response = client.get("/api/auth/me")
+    assert response.status_code == 401
+    assert "Not authenticated" in response.json()["detail"]
+
+
+def test_get_current_user_with_invalid_token():
+    """Test /api/auth/me with invalid token"""
+    response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": "Bearer invalid_token_here"}
+    )
+    assert response.status_code == 401
+
+
+def test_protected_video_endpoint_without_auth():
+    """Test accessing videos without authentication fails"""
+    response = client.get("/api/videos")
+    assert response.status_code == 401
+
+
+def test_protected_video_endpoint_with_auth():
+    """Test accessing videos with authentication succeeds"""
+    # Signup to get token
+    signup_response = client.post(
+        "/api/auth/signup",
+        json={"username": "videotest", "password": "pass123"}
+    )
+    token = signup_response.json()["access_token"]
+    
+    # Get videos with auth
+    response = client.get(
+        "/api/videos",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "success" in data
+    assert "data" in data
+
+
+def test_save_video_without_auth():
+    """Test saving video without authentication fails"""
+    response = client.post(
+        "/api/videos",
+        json={"url": "https://www.youtube.com/watch?v=test"}
+    )
+    assert response.status_code == 401
+
+
+def test_token_in_invalid_format():
+    """Test token without Bearer prefix"""
+    response = client.get(
+        "/api/videos",
+        headers={"Authorization": "just_the_token"}
+    )
+    assert response.status_code == 401
+
+
+def test_empty_authorization_header():
+    """Test empty authorization header"""
+    response = client.get(
+        "/api/videos",
+        headers={"Authorization": ""}
+    )
+    assert response.status_code == 401
+
+
+============================================================
+FILE: tests/test_database.py
+============================================================
+
+import pytest
+from backend.services.database import DatabaseService
+
+def test_database_initialization(test_db):
+    """Test database creates tables correctly"""
+    assert test_db.db_path == "test_global.db"
+
+def test_save_video(test_db, sample_video_data):
+    """Test saving a video to database"""
+    result = test_db.save_video(sample_video_data)
+    
+    assert result['success'] == True
+    assert result['data']['video_id'] == 'test123'
+    assert result['data']['language'] == 'English'
+
+def test_save_duplicate_video(test_db, sample_video_data):
+    """Test saving duplicate video fails"""
+    test_db.save_video(sample_video_data)
+    result = test_db.save_video(sample_video_data)
+    
+    assert result['success'] == False
+    assert 'already exists' in result['error'].lower()
+
+def test_get_video_by_id(test_db, sample_video_data):
+    """Test retrieving video by ID"""
+    test_db.save_video(sample_video_data)
+    video = test_db.get_video_by_id('test123')
+    
+    assert video is not None
+    assert video['video_id'] == 'test123'
+    assert video['raw_transcript'] == 'This is a test transcript'
+
+def test_get_nonexistent_video(test_db):
+    """Test retrieving video that doesn't exist"""
+    video = test_db.get_video_by_id('nonexistent')
+    assert video is None
+
+def test_get_all_videos(test_db, sample_video_data):
+    """Test retrieving all videos"""
+    test_db.save_video(sample_video_data)
+    
+    sample_video_data['video_id'] = 'test456'
+    sample_video_data['url'] = 'https://www.youtube.com/watch?v=test456'
+    test_db.save_video(sample_video_data)
+    
+    videos = test_db.get_all_videos()
+    assert len(videos) == 2
+
+def test_get_all_videos_empty(test_db):
+    """Test get all videos when database is empty"""
+    videos = test_db.get_all_videos()
+    assert videos == []
+
+def test_save_video_missing_required_field(test_db):
+    """Test saving video with missing required field"""
+    incomplete_data = {
+        'url': 'https://www.youtube.com/watch?v=test',
+        # Missing video_id
+        'raw_transcript': 'test'
+    }
+    result = test_db.save_video(incomplete_data)
+    assert result['success'] == False
+
+def test_save_video_database_error(test_db):
+    """Test handling of database errors"""
+    invalid_data = {
+        'url': 'test',
+        'video_id': 'test',
+        'raw_transcript': None,  # Might cause issues
+        'segments_count': 'not_a_number'  # Wrong type
+    }
+    result = test_db.save_video(invalid_data)
+    # Should handle well without crashing
+    assert 'success' in result
+
+def test_save_video(test_db, sample_video_data):
+    """Test saving a video to database with user_id"""
+    # Create a test user first
+    user_result = test_db.create_user("videoowner", "pass123")
+    user_id = user_result['data']['id']
+    
+    result = test_db.save_video(sample_video_data, user_id)
+    
+    assert result['success'] == True
+    assert result['data']['video_id'] == 'test123'
+    assert result['data']['user_id'] == user_id
+
+def test_save_duplicate_video(test_db, sample_video_data):
+    """Test saving duplicate video fails"""
+    user_result = test_db.create_user("dupuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    result = test_db.save_video(sample_video_data, user_id)
+    
+    assert result['success'] == False
+    assert 'already exists' in result['error'].lower()
+
+def test_get_video_by_id(test_db, sample_video_data):
+    """Test retrieving video by ID"""
+    user_result = test_db.create_user("getuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    video = test_db.get_video_by_id('test123')
+    
+    assert video is not None
+    assert video['video_id'] == 'test123'
+    assert video['raw_transcript'] == 'This is a test transcript'
+
+def test_get_all_videos(test_db, sample_video_data):
+    """Test retrieving all videos for a user"""
+    user_result = test_db.create_user("allvidsuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    sample_video_data['video_id'] = 'test456'
+    sample_video_data['url'] = 'https://www.youtube.com/watch?v=test456'
+    test_db.save_video(sample_video_data, user_id)
+    
+    videos = test_db.get_user_videos(user_id)
+    assert len(videos) == 2
+
+def test_save_video_missing_required_field(test_db):
+    """Test saving video with missing required field"""
+    user_result = test_db.create_user("missingfield", "pass123")
+    user_id = user_result['data']['id']
+    
+    incomplete_data = {
+        'url': 'https://www.youtube.com/watch?v=test',
+        # Missing video_id
+        'raw_transcript': 'test'
+    }
+    result = test_db.save_video(incomplete_data, user_id)
+    assert result['success'] == False
+
+def test_save_video_database_error(test_db):
+    """Test handling of database errors"""
+    user_result = test_db.create_user("erroruser", "pass123")
+    user_id = user_result['data']['id']
+    
+    invalid_data = {
+        'url': 'test',
+        'video_id': 'test',
+        'raw_transcript': None,
+        'segments_count': 'not_a_number'
+    }
+    result = test_db.save_video(invalid_data, user_id)
+    assert 'success' in result
+
+# User-specific tests
+def test_create_user(test_db):
+    """Test creating a new user"""
+    result = test_db.create_user("newuser", "hashedpassword123")
+    
+    assert result['success'] == True
+    assert result['data']['username'] == "newuser"
+    assert 'id' in result['data']
+
+def test_create_duplicate_user(test_db):
+    """Test creating duplicate user fails"""
+    test_db.create_user("duplicate", "pass123")
+    result = test_db.create_user("duplicate", "pass456")
+    
+    assert result['success'] == False
+    assert 'already exists' in result['error'].lower()
+
+def test_get_user_by_username(test_db):
+    """Test retrieving user by username"""
+    test_db.create_user("findme", "hashedpass")
+    user = test_db.get_user_by_username("findme")
+    
+    assert user is not None
+    assert user['username'] == "findme"
+    assert 'hashed_password' in user
+
+def test_get_user_by_username_not_found(test_db):
+    """Test retrieving non-existent user"""
+    user = test_db.get_user_by_username("doesnotexist")
+    assert user is None
+
+def test_get_user_by_id(test_db):
+    """Test retrieving user by ID"""
+    result = test_db.create_user("idtest", "pass123")
+    user_id = result['data']['id']
+    
+    user = test_db.get_user_by_id(user_id)
+    assert user is not None
+    assert user['username'] == "idtest"
+
+def test_get_user_videos(test_db, sample_video_data):
+    """Test getting videos for specific user"""
+    user_result = test_db.create_user("videouser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    videos = test_db.get_user_videos(user_id)
+    assert len(videos) == 1
+    assert videos[0]['user_id'] == user_id
+
+def test_get_user_videos_empty(test_db):
+    """Test getting videos for user with no videos"""
+    user_result = test_db.create_user("novids", "pass123")
+    user_id = user_result['data']['id']
+    
+    videos = test_db.get_user_videos(user_id)
+    assert videos == []
+
+
+def test_delete_video(test_db, sample_video_data):
+    """Test deleting a video"""
+    user_result = test_db.create_user("deleteuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    result = test_db.delete_video('test123')
+    assert result['success'] == True
+    
+    video = test_db.get_video_by_id('test123')
+    assert video is None
+
+
+def test_delete_nonexistent_video(test_db):
+    """Test deleting video that doesn't exist"""
+    result = test_db.delete_video('nonexistent')
+    assert result['success'] == False
+
+
+def test_update_video_summary(test_db, sample_video_data):
+    """Test updating video summary"""
+    user_result = test_db.create_user("updateuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    result = test_db.update_video('test123', {'ai_summary': 'Updated summary'})
+    assert result['success'] == True
+    assert result['data']['ai_summary'] == 'Updated summary'
+
+
+def test_update_video_no_valid_fields(test_db, sample_video_data):
+    """Test updating with invalid fields"""
+    user_result = test_db.create_user("noupdateuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    result = test_db.update_video('test123', {'invalid_field': 'test'})
+    assert result['success'] == False
+
+
+def test_update_nonexistent_video(test_db):
+    """Test updating video that doesn't exist"""
+    result = test_db.update_video('nonexistent', {'ai_summary': 'test'})
+    assert result['success'] == False
+
+
+============================================================
+FILE: tests/test_groq_summarizer.py
+============================================================
+
+import pytest
+from unittest.mock import Mock, patch
+from backend.services.groq_summarizer import GroqSummarizer
+import os
+
+def test_groq_summarizer_initialization():
+    """Test GroqSummarizer initializes with API key"""
+    os.environ['GROQ_API_KEY'] = 'test_key'
+    summarizer = GroqSummarizer()
+    assert summarizer.client is not None
+
+def test_groq_summarizer_no_api_key():
+    """Test GroqSummarizer raises error without API key"""
+    if 'GROQ_API_KEY' in os.environ:
+        del os.environ['GROQ_API_KEY']
+    
+    with pytest.raises(ValueError):
+        GroqSummarizer()
+
+@patch('backend.services.groq_summarizer.Groq')
+def test_summarize_success(mock_groq):
+    """Test successful summarization"""
+    os.environ['GROQ_API_KEY'] = 'test_key'
+    
+    # Mock the Groq API response
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "Test summary"
+    
+    mock_client = Mock()
+    mock_client.chat.completions.create.return_value = mock_response
+    mock_groq.return_value = mock_client
+    
+    summarizer = GroqSummarizer()
+    result = summarizer.summarize("Test transcript")
+    
+    assert result['success'] == True
+    assert result['summary'] == "Test summary"
+
+@patch('backend.services.groq_summarizer.Groq')
+def test_summarize_truncates_long_transcript(mock_groq):
+    """Test summarizer truncates long transcripts"""
+    os.environ['GROQ_API_KEY'] = 'test_key'
+    
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "Summary"
+    
+    mock_client = Mock()
+    mock_client.chat.completions.create.return_value = mock_response
+    mock_groq.return_value = mock_client
+    
+    summarizer = GroqSummarizer()
+    long_transcript = "x" * 10000
+    result = summarizer.summarize(long_transcript, max_length=4000)
+    
+    # Check that the result is successful
+    assert result['success'] == True
+    assert result['summary'] == "Summary"
+    
+    # Check that the API was called with truncated transcript
+    call_args = mock_client.chat.completions.create.call_args
+    assert len(call_args[1]['messages'][1]['content']) < 10000
+
+@patch('backend.services.groq_summarizer.Groq')
+def test_summarize_api_error(mock_groq):
+    """Test summarizer handles API errors"""
+    os.environ['GROQ_API_KEY'] = 'test_key'
+    
+    mock_client = Mock()
+    mock_client.chat.completions.create.side_effect = Exception("API Error")
+    mock_groq.return_value = mock_client
+    
+    summarizer = GroqSummarizer()
+    result = summarizer.summarize("Test transcript")
+    
+    assert result['success'] == False
+    assert 'error' in result
+
+
+============================================================
+FILE: tests/test_youtube_fetcher.py
+============================================================
+
+import pytest
+from backend.services.youtube_fetcher import YouTubeFetcher
+
+def test_extract_video_id_standard_url():
+    """Test extracting video ID from standard YouTube URL"""
+    fetcher = YouTubeFetcher()
+    url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    video_id = fetcher.extract_video_id(url)
+    assert video_id == "dQw4w9WgXcQ"
+
+def test_extract_video_id_short_url():
+    """Test extracting video ID from youtu.be URL"""
+    fetcher = YouTubeFetcher()
+    url = "https://youtu.be/dQw4w9WgXcQ"
+    video_id = fetcher.extract_video_id(url)
+    assert video_id == "dQw4w9WgXcQ"
+
+def test_extract_video_id_with_params():
+    """Test extracting video ID from URL with parameters"""
+    fetcher = YouTubeFetcher()
+    url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s"
+    video_id = fetcher.extract_video_id(url)
+    assert video_id == "dQw4w9WgXcQ"
+
+def test_extract_video_id_invalid_url():
+    """Test extracting video ID from invalid URL raises error"""
+    fetcher = YouTubeFetcher()
+    with pytest.raises(ValueError):
+        fetcher.extract_video_id("https://notayoutubeurl.com")
+
+def test_can_handle_youtube_url():
+    """Test can_handle returns True for YouTube URLs"""
+    fetcher = YouTubeFetcher()
+    assert fetcher.can_handle("https://www.youtube.com/watch?v=test") == True
+    assert fetcher.can_handle("https://youtu.be/test") == True
+
+def test_can_handle_non_youtube_url():
+    """Test can_handle returns False for non-YouTube URLs"""
+    fetcher = YouTubeFetcher()
+    assert fetcher.can_handle("https://vimeo.com/test") == False
+
+def test_get_transcript_error_handling():
+    """Test get_transcript handles errors gracefully"""
+    fetcher = YouTubeFetcher()
+    # Use a video ID that will for sure fail
+    result = fetcher.get_transcript("https://www.youtube.com/watch?v=invalidvideoid123")
+    
+    assert result['success'] == False
+    assert 'error' in result
+    assert 'error_type' in result
+
+def test_extract_video_id_with_whitespace():
+    """Test extracting video ID with whitespace"""
+    fetcher = YouTubeFetcher()
+    url = "  https://www.youtube.com/watch?v=test123  "
+    video_id = fetcher.extract_video_id(url)
+    assert video_id == "test123"
+

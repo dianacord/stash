@@ -12,6 +12,19 @@ class DatabaseService:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
+        # users table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                hashed_password TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_username ON users(username)')
+        
+        # saved videos table with user_id column
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS saved_videos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,12 +37,15 @@ class DatabaseService:
                 language TEXT,
                 is_generated BOOLEAN,
                 segments_count INTEGER,
+                user_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
             )
         ''')
         
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_video_id ON saved_videos(video_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON saved_videos(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_created_at ON saved_videos(created_at DESC)')
         
         conn.commit()
