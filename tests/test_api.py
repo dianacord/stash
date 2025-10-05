@@ -434,3 +434,125 @@ def test_signup_create_user_fails():
         
         assert response.status_code == 400
         assert "Database error" in response.json()["detail"]
+
+
+def test_delete_video_success():
+    """Test deleting a video"""
+    token = get_auth_token(username="deletetest", password="pass123")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        with patch('backend.main.db_service.delete_video') as mock_delete:
+            mock_get.return_value = {
+                'video_id': 'del123',
+                'user_id': 1
+            }
+            mock_delete.return_value = {'success': True}
+            
+            response = client.delete(
+                "/api/videos/del123",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            
+            assert response.status_code == 200
+            assert response.json()['success'] == True
+
+
+def test_delete_video_not_found():
+    """Test deleting non-existent video"""
+    token = get_auth_token()
+    
+    with patch('backend.main.db_service.get_video_by_id', return_value=None):
+        response = client.delete(
+            "/api/videos/nonexistent",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 404
+
+
+def test_delete_video_wrong_owner():
+    """Test deleting video owned by another user"""
+    token = get_auth_token(username="deluser1", password="pass1")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        mock_get.return_value = {
+            'video_id': 'test123',
+            'user_id': 999
+        }
+        
+        response = client.delete(
+            "/api/videos/test123",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 403
+
+
+def test_delete_video_without_auth():
+    """Test deleting video without authentication"""
+    response = client.delete("/api/videos/test123")
+    assert response.status_code == 401
+
+
+def test_update_video_success():
+    """Test updating video summary"""
+    token = get_auth_token(username="updatetest", password="pass123")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        with patch('backend.main.db_service.update_video') as mock_update:
+            mock_get.return_value = {
+                'video_id': 'upd123',
+                'user_id': 1,
+                'ai_summary': 'Old summary'
+            }
+            mock_update.return_value = {
+                'success': True,
+                'data': {'video_id': 'upd123', 'ai_summary': 'New summary'}
+            }
+            
+            response = client.put(
+                "/api/videos/upd123",
+                json={"ai_summary": "New summary"},
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            
+            assert response.status_code == 200
+            assert response.json()['success'] == True
+
+
+def test_update_video_not_found():
+    """Test updating non-existent video"""
+    token = get_auth_token()
+    
+    with patch('backend.main.db_service.get_video_by_id', return_value=None):
+        response = client.put(
+            "/api/videos/nonexistent",
+            json={"ai_summary": "test"},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 404
+
+
+def test_update_video_wrong_owner():
+    """Test updating video owned by another user"""
+    token = get_auth_token(username="upduser2", password="pass2")
+    
+    with patch('backend.main.db_service.get_video_by_id') as mock_get:
+        mock_get.return_value = {
+            'video_id': 'test123',
+            'user_id': 999
+        }
+        
+        response = client.put(
+            "/api/videos/test123",
+            json={"ai_summary": "test"},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 403
+
+
+def test_update_video_without_auth():
+    """Test updating video without authentication"""
+    response = client.put(
+        "/api/videos/test123",
+        json={"ai_summary": "test"}
+    )
+    assert response.status_code == 401

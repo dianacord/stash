@@ -3,17 +3,19 @@ import os
 import sqlite3
 from backend.services.database import DatabaseService
 
-@pytest.fixture
-def test_db():
-    """Create a temporary test database with users table"""
-    test_db_path = "test_stash.db"
+@pytest.fixture(autouse=True)
+def setup_test_db():
+    """
+    Global test database fixture - automatically runs for ALL tests.
+    Creates fresh test database with users and saved_videos tables.
+    """
+    test_db_path = "test_global.db"
     
-    # Create fresh database for tests
-    db_service = DatabaseService(db_path=test_db_path)
-    
-    # ADD: Create users table (migration)
+    # Create test database
     conn = sqlite3.connect(test_db_path)
     cursor = conn.cursor()
+    
+    # Create users table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,20 +24,45 @@ def test_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Also add user_id column to saved_videos
-    try:
-        cursor.execute('ALTER TABLE saved_videos ADD COLUMN user_id INTEGER')
-    except sqlite3.OperationalError:
-        pass  # Column already exists
+    
+    # Create saved_videos table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS saved_videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            video_id TEXT NOT NULL UNIQUE,
+            platform TEXT DEFAULT 'youtube',
+            title TEXT,
+            raw_transcript TEXT,
+            ai_summary TEXT,
+            language TEXT,
+            is_generated BOOLEAN,
+            segments_count INTEGER,
+            user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
     conn.commit()
     conn.close()
     
-    yield db_service
+    # Make all tests use this test database
+    from backend import main
+    main.db_service = DatabaseService(db_path=test_db_path)
     
-    # Cleanup after tests
+    yield main.db_service
+    
+    # Cleanup after all tests
     if os.path.exists(test_db_path):
         os.remove(test_db_path)
+
+
+@pytest.fixture
+def test_db(setup_test_db):
+    """Alias for tests that explicitly request test_db"""
+    return setup_test_db
+
 
 @pytest.fixture
 def sample_video_data():

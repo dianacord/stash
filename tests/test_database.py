@@ -3,7 +3,7 @@ from backend.services.database import DatabaseService
 
 def test_database_initialization(test_db):
     """Test database creates tables correctly"""
-    assert test_db.db_path == "test_stash.db"
+    assert test_db.db_path == "test_global.db"
 
 def test_save_video(test_db, sample_video_data):
     """Test saving a video to database"""
@@ -207,3 +207,52 @@ def test_get_user_videos_empty(test_db):
     
     videos = test_db.get_user_videos(user_id)
     assert videos == []
+
+
+def test_delete_video(test_db, sample_video_data):
+    """Test deleting a video"""
+    user_result = test_db.create_user("deleteuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    result = test_db.delete_video('test123')
+    assert result['success'] == True
+    
+    video = test_db.get_video_by_id('test123')
+    assert video is None
+
+
+def test_delete_nonexistent_video(test_db):
+    """Test deleting video that doesn't exist"""
+    result = test_db.delete_video('nonexistent')
+    assert result['success'] == False
+
+
+def test_update_video_summary(test_db, sample_video_data):
+    """Test updating video summary"""
+    user_result = test_db.create_user("updateuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    result = test_db.update_video('test123', {'ai_summary': 'Updated summary'})
+    assert result['success'] == True
+    assert result['data']['ai_summary'] == 'Updated summary'
+
+
+def test_update_video_no_valid_fields(test_db, sample_video_data):
+    """Test updating with invalid fields"""
+    user_result = test_db.create_user("noupdateuser", "pass123")
+    user_id = user_result['data']['id']
+    
+    test_db.save_video(sample_video_data, user_id)
+    
+    result = test_db.update_video('test123', {'invalid_field': 'test'})
+    assert result['success'] == False
+
+
+def test_update_nonexistent_video(test_db):
+    """Test updating video that doesn't exist"""
+    result = test_db.update_video('nonexistent', {'ai_summary': 'test'})
+    assert result['success'] == False
