@@ -11,61 +11,6 @@ client = TestClient(app)
 TEST_USER = "testuser_auth"
 TEST_PASSWORD = "testpass123"
 
-@pytest.fixture(autouse=True)
-def setup_test_db():
-    """Use test database for auth tests"""
-    # Create test database with users table
-    test_db_path = "test_auth.db"
-    
-    conn = sqlite3.connect(test_db_path)
-    cursor = conn.cursor()
-    
-    # Create users table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            hashed_password TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Create saved_videos table with user_id
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS saved_videos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT NOT NULL,
-            video_id TEXT NOT NULL UNIQUE,
-            platform TEXT DEFAULT 'youtube',
-            title TEXT,
-            raw_transcript TEXT,
-            ai_summary TEXT,
-            language TEXT,
-            is_generated BOOLEAN,
-            segments_count INTEGER,
-            user_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    
-    # Replace the database service in main with test database
-    from backend import main
-    original_db_service = main.db_service
-    main.db_service = DatabaseService(db_path=test_db_path)
-    
-    yield
-    
-    # Restore original database service
-    main.db_service = original_db_service
-    
-    # Cleanup test database
-    if os.path.exists(test_db_path):
-        os.remove(test_db_path)
-
 
 def test_signup_success():
     """Test successful user signup"""
