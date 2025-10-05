@@ -5,11 +5,31 @@ from backend.services.database import DatabaseService
 
 @pytest.fixture
 def test_db():
-    """Create a temporary test database"""
+    """Create a temporary test database with users table"""
     test_db_path = "test_stash.db"
     
     # Create fresh database for tests
     db_service = DatabaseService(db_path=test_db_path)
+    
+    # ADD: Create users table (migration)
+    conn = sqlite3.connect(test_db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            hashed_password TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Also add user_id column to saved_videos
+    try:
+        cursor.execute('ALTER TABLE saved_videos ADD COLUMN user_id INTEGER')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    conn.commit()
+    conn.close()
     
     yield db_service
     
