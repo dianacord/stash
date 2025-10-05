@@ -209,3 +209,66 @@ class DatabaseService:
         finally:
             if conn:
                 conn.close()
+
+    def delete_video(self, video_id: str) -> Dict[str, Any]:
+        """Delete a video by ID"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM saved_videos WHERE video_id = ?', (video_id,))
+            conn.commit()
+            
+            if cursor.rowcount > 0:
+                return {'success': True}
+            else:
+                return {'success': False, 'error': 'Video not found'}
+                
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()
+
+    def update_video(self, video_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Update video fields"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # Only allow updating certain fields
+            allowed_fields = ['ai_summary', 'title']
+            update_parts = []
+            values = []
+            
+            for field in allowed_fields:
+                if field in updates:
+                    update_parts.append(f"{field} = ?")
+                    values.append(updates[field])
+            
+            if not update_parts:
+                return {'success': False, 'error': 'No valid fields to update'}
+            
+            values.append(video_id)
+            query = f"UPDATE saved_videos SET {', '.join(update_parts)} WHERE video_id = ?"
+            
+            cursor.execute(query, values)
+            conn.commit()
+            
+            # Get updated video
+            cursor.execute('SELECT * FROM saved_videos WHERE video_id = ?', (video_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return {'success': True, 'data': dict(row)}
+            else:
+                return {'success': False, 'error': 'Video not found'}
+                
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        finally:
+            if conn:
+                conn.close()

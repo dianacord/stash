@@ -280,3 +280,58 @@ def health_check():
         "service": "stash-api", 
         "groq_summarizer": summarizer_available
     }
+
+@app.delete("/api/videos/{video_id}")
+def delete_video(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a video (only if it belongs to current user)"""
+    try:
+        video = db_service.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        # Check ownership
+        if video.get('user_id') != current_user['user_id']:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Delete from database
+        result = db_service.delete_video(video_id)
+        
+        if result['success']:
+            return {"success": True, "message": "Video deleted"}
+        else:
+            raise HTTPException(status_code=500, detail=result['error'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/videos/{video_id}")
+def update_video(
+    video_id: str, 
+    request: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update video summary/notes (only if it belongs to current user)"""
+    try:
+        video = db_service.get_video_by_id(video_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        # Check ownership
+        if video.get('user_id') != current_user['user_id']:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Update in database
+        result = db_service.update_video(video_id, request)
+        
+        if result['success']:
+            return {"success": True, "message": "Video updated", "data": result['data']}
+        else:
+            raise HTTPException(status_code=500, detail=result['error'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
