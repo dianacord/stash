@@ -1,0 +1,33 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear (catches common bugs)
+    "UP",  # pyupgrade (modernize syntax)
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+
+ignore = [
+    "E501",  # line too long (formatter handles this)
+    "E712",  # comparison to True/False (explicit is fine in tests)
+    "B008",  # function call in defaults (FastAPI Depends pattern)
+    "B904",  # raise from (not critical for this codebase)
+    "SIM117",  # nested with (readable as-is)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811"]  # allow unused imports and redefinitions in tests
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]
