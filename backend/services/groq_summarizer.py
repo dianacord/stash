@@ -1,6 +1,11 @@
 import os
 from groq import Groq
 
+# Defaults are centralized for easier tuning/testing
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_TEMPERATURE = 0.4
+DEFAULT_MAX_OUTPUT_TOKENS = 1000
+
 class GroqSummarizer:
     """Service to adaptively summarize video transcripts using Groq AI"""
     
@@ -22,10 +27,12 @@ class GroqSummarizer:
             dict with 'success' and 'summary' or 'error'
         """
         try:
+            if not transcript or not transcript.strip():
+                return {'success': False, 'error': 'Transcript is empty'}
             truncated_transcript = transcript[:max_length]
             
             response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=DEFAULT_MODEL,
                 messages=[
                     {
                         "role": "system",
@@ -44,8 +51,8 @@ class GroqSummarizer:
                         "content": f"Here is the transcript:\n\n{truncated_transcript}\n\nPlease create adaptive notes."
                     }
                 ],
-                temperature=0.4,   # more deterministic
-                max_tokens=1000     # longer output allowed
+                temperature=DEFAULT_TEMPERATURE,   # more deterministic
+                max_tokens=DEFAULT_MAX_OUTPUT_TOKENS     # longer output allowed
             )
             
             summary = response.choices[0].message.content
