@@ -3,6 +3,7 @@ import sqlite3
 
 import pytest
 
+from backend.dependencies import ServiceContainer
 from backend.services.database import DatabaseService
 
 
@@ -50,12 +51,49 @@ def setup_test_db():
     conn.commit()
     conn.close()
 
-    # Make all tests use this test database
-    from backend import main
+    # Create test service container with test database
+    test_db_service = DatabaseService(db_path=test_db_path)
 
-    main.db_service = DatabaseService(db_path=test_db_path)
+    # Replace global container with test container
+    from backend import dependencies
 
-    yield main.db_service
+    original_container = dependencies._container
+
+    # Create test container
+    test_container = ServiceContainer.__new__(ServiceContainer)
+    test_container._db_service = test_db_service
+
+    # Initialize other services
+    from backend.services.youtube_fetcher import YouTubeFetcher
+
+    test_container._youtube_fetcher = YouTubeFetcher()
+
+    try:
+        from backend.services.groq_summarizer import GroqSummarizer
+
+        test_container._groq_summarizer = GroqSummarizer()
+    except Exception:
+        test_container._groq_summarizer = None
+
+    # Initialize service layer
+    from backend.services.user_service import AuthService
+    from backend.services.video_service import VideoService
+
+    test_container._video_service = VideoService(
+        fetcher=test_container._youtube_fetcher,
+        repository=test_container._db_service,
+        summarizer=test_container._groq_summarizer,
+    )
+
+    test_container._auth_service = AuthService(user_repository=test_container._db_service)
+
+    # Replace global container
+    dependencies._container = test_container
+
+    yield test_db_service
+
+    # Restore original container
+    dependencies._container = original_container
 
     # Cleanup after all tests
     if os.path.exists(test_db_path):
