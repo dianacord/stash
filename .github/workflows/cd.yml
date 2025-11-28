@@ -1,0 +1,36 @@
+name: CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Azure Container Registry login
+        run: |
+          az acr login --name stashdidoacr
+
+      - name: Build Docker image
+        run: |
+          docker build -t stashdidoacr.azurecr.io/stash:latest .
+
+      - name: Push image to ACR
+        run: |
+          docker push stashdidoacr.azurecr.io/stash:latest
+
+      - name: Deploy Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: Stash-web
+          images: stashdidoacr.azurecr.io/stash:latest

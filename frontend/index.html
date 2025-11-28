@@ -97,8 +97,9 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:8080/api';
-        let authMode = 'login';
+    const API_URL = window.location.hostname.includes("azurewebsites.net")
+        ? window.location.origin + "/api"
+        : "http://localhost:8000/api";
 
         function getToken() { return localStorage.getItem('stash_token'); }
         function getUsername() { return localStorage.getItem('stash_username'); }
