@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Test & QA dependencies (CI installs this file before running pytest)
+pytest==8.4.2
+pytest-cov==7.0.0
+ruff==0.8.4
