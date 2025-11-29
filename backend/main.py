@@ -4,13 +4,22 @@ Routes delegate to service layer for business logic.
 Follows Single Responsibility and Dependency Inversion principles.
 """
 
+import time
+
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend.dependencies import get_auth_service, get_container, get_video_service
+from backend.dependencies import (
+    get_auth_service,
+    get_container,
+    get_metrics_service,
+    get_video_service,
+)
+from backend.metrics import METRICS_PATH, MetricsService
 from backend.services.auth_service import verify_token
 from backend.services.user_service import AuthService
 from backend.services.video_service import VideoService
@@ -27,6 +36,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class PrometheusMiddleware(BaseHTTPMiddleware):
+    """Middleware to record Prometheus metrics for every request."""
+
+    async def dispatch(self, request, call_next):  # type: ignore[override]
+        start = time.perf_counter()
+        response = await call_next(request)
+
+        # Prefer route path pattern to reduce label cardinality (e.g. /api/videos/{video_id})
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+
+        # Record metrics (service handles exclusion of metrics endpoint)
+        metrics_service = get_metrics_service()
+        metrics_service.record_request(
+            request.method, path, response.status_code, start, exclude_path=METRICS_PATH
+        )
+
+        return response
+
+
+app.add_middleware(PrometheusMiddleware)
 
 
 @app.get("/")
@@ -276,3 +308,17 @@ def health_check():
         "service": "stash-api",
         "groq_summarizer": container.summarizer_available,
     }
+
+
+# ============================================================================
+# Metrics Endpoint (Unauthenticated)
+# ============================================================================
+
+
+@app.get(METRICS_PATH)
+def get_metrics(metrics_service: MetricsService = Depends(get_metrics_service)):
+    """
+    Expose Prometheus metrics in text format.
+    Public endpoint - no authentication required.
+    """
+    return metrics_service.get_metrics_response()

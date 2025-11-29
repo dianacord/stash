@@ -8,6 +8,7 @@ from backend.services.groq_summarizer import GroqSummarizer
 from backend.services.user_service import AuthService
 from backend.services.video_service import VideoService
 from backend.services.youtube_fetcher import YouTubeFetcher
+from backend.metrics import MetricsService
 
 
 class ServiceContainer:
@@ -35,6 +36,9 @@ class ServiceContainer:
 
         self._auth_service = AuthService(user_repository=self._db_service)
 
+        # Monitoring layer
+        self._metrics_service = MetricsService()
+
     @property
     def video_service(self) -> VideoService:
         """Get video service instance."""
@@ -49,6 +53,11 @@ class ServiceContainer:
     def db_service(self) -> DatabaseService:
         """Get database service (for backward compatibility with tests)."""
         return self._db_service
+
+    @property
+    def metrics_service(self) -> MetricsService:
+        """Get metrics service instance."""
+        return self._metrics_service
 
     @property
     def summarizer_available(self) -> bool:
@@ -76,3 +85,8 @@ def get_video_service() -> VideoService:
 def get_auth_service() -> AuthService:
     """FastAPI dependency for auth service."""
     return get_container().auth_service
+
+
+def get_metrics_service() -> MetricsService:
+    """FastAPI dependency for metrics service."""
+    return get_container().metrics_service
