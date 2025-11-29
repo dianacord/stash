@@ -3,12 +3,12 @@
 Provides centralized service initialization and dependency management.
 """
 
+from backend.metrics import MetricsService
 from backend.services.database import DatabaseService
 from backend.services.groq_summarizer import GroqSummarizer
 from backend.services.user_service import AuthService
 from backend.services.video_service import VideoService
 from backend.services.youtube_fetcher import YouTubeFetcher
-from backend.metrics import MetricsService
 
 
 class ServiceContainer:
