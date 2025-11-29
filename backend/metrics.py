@@ -77,9 +77,7 @@ class MetricsService:
         status_str = str(status_code)
 
         # Record request count
-        self.http_requests_total.labels(
-            method=method, path=path, status_code=status_str
-        ).inc()
+        self.http_requests_total.labels(method=method, path=path, status_code=status_str).inc()
 
         # Record request duration
         self.http_request_duration_seconds.labels(
@@ -88,9 +86,7 @@ class MetricsService:
 
         # Record errors (4xx and 5xx)
         if 400 <= status_code < 600:
-            self.http_errors_total.labels(
-                method=method, path=path, status_code=status_str
-            ).inc()
+            self.http_errors_total.labels(method=method, path=path, status_code=status_str).inc()
 
     def get_metrics_response(self) -> Response:
         """
