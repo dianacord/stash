@@ -87,6 +87,11 @@ def setup_test_db():
 
     test_container._auth_service = AuthService(user_repository=test_container._db_service)
 
+    # Initialize monitoring layer
+    from backend.metrics import MetricsService
+
+    test_container._metrics_service = MetricsService()
+
     # Replace global container
     dependencies._container = test_container
 
