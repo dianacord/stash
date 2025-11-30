@@ -4,6 +4,27 @@ from urllib.parse import parse_qs, urlparse
 
 from youtube_transcript_api import YouTubeTranscriptApi
 
+from backend.protocols import TranscriptClient
+
+
+class _YouTubeTranscriptClientAdapter:
+    """Adapter over youtube-transcript-api honoring TranscriptClient.
+
+    Provides a stable `fetch` API regardless of the underlying library
+    version exposing either `.fetch` or `get_transcript`.
+    """
+
+    def __init__(self) -> None:
+        self.api = YouTubeTranscriptApi()
+
+    def fetch(self, video_id: str, languages: list[str]) -> object:
+        try:
+            # Newer versions expose instance `.fetch` returning a FetchedTranscript
+            return self.api.fetch(video_id, languages=languages)  # type: ignore[attr-defined]
+        except AttributeError:
+            # Fallback to classic static method that returns list[dict]
+            return YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
+
 
 class YouTubeFetcher:
     """Service for extracting YouTube video IDs and transcripts.
@@ -15,9 +36,10 @@ class YouTubeFetcher:
       and the classic list-of-dicts format returned by `get_transcript`.
     """
 
-    def __init__(self) -> None:
-        # While the library often exposes static methods, we keep an instance for flexibility
-        self.api = YouTubeTranscriptApi()
+    def __init__(self, client: TranscriptClient | None = None) -> None:
+        # Dependency inversion: allow injecting a transcript client.
+        # Default keeps backward compatibility for tests/consumers.
+        self._client: TranscriptClient = client or _YouTubeTranscriptClientAdapter()
 
     def extract_video_id(self, url: str) -> str:
         """Extract the YouTube video ID from a URL.
@@ -122,15 +144,8 @@ class YouTubeFetcher:
         try:
             video_id = self.extract_video_id(url)
 
-            # Prefer English. Keep using instance API for back-compat; some versions
-            # expose a richer FetchedTranscript via `fetch`, others return list via `get_transcript`.
-            try:
-                payload = self.api.fetch(video_id, languages=["en", "en-US", "en-GB"])  # type: ignore[attr-defined]
-            except AttributeError:
-                # Fallback to classic static method if `.fetch` isn't available
-                payload = YouTubeTranscriptApi.get_transcript(
-                    video_id, languages=["en", "en-US", "en-GB"]
-                )
+            # Prefer English variants via injected client
+            payload = self._client.fetch(video_id, languages=["en", "en-US", "en-GB"])
 
             normalized = self._join_text_from_payload(payload)
 

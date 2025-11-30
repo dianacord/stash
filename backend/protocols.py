@@ -34,6 +34,22 @@ class VideoFetcher(Protocol):
         ...
 
 
+class TranscriptClient(Protocol):
+    """Protocol for a YouTube transcript client.
+
+    Abstracts the underlying `youtube-transcript-api` to enable
+    dependency inversion and easier testing/mocking.
+    """
+
+    def fetch(self, video_id: str, languages: list[str]) -> object:
+        """Return a transcript payload for the given video id.
+
+        Implementations may return a library-specific object or a list of
+        dicts; the service will normalize the shape.
+        """
+        ...
+
+
 class Summarizer(Protocol):
     """Protocol for AI-powered text summarization."""
 
