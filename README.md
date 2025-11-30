@@ -1,331 +1,214 @@
-# Stash - Video Content Organizer
+<div align="center">
 
-Transform saved YouTube videos into organized, AI-powered summaries. Never lose track of valuable video content again.
+# Stash
 
-## Overview
+Organize saved YouTube videos with transcript extraction, AI summarization, authentication, metrics, and production-ready DevOps (CI/CD + containerization) on Azure.
 
-Stash solves the common problem of saving videos for later but never revisiting them. The application automatically extracts transcripts from YouTube videos and generates intelligent, structured summaries using AI, making your saved content instantly accessible.
+</div>
 
-## Features
+## 1. Overview
+Stash tackles the “save for later but never revisit” problem. Users save a YouTube URL; the backend extracts the transcript, optionally summarizes it via Groq’s Llama model, and persists structured information. This assignment extends the original app by adding: automated testing & coverage gates, Docker image builds, GitHub Actions CI/CD, secret management, health/metrics endpoints, and improved code quality (SOLID + dependency injection).
 
-- **Automatic Transcript Extraction**: Fetches video transcripts directly from YouTube
-- **AI-Powered Summaries**: Generates adaptive summaries using Groq's Llama 3.3 70B model
-  - Recipe videos → ingredients + step-by-step instructions
-  - Travel videos → itineraries with places and tips
-  - Educational content → key points and takeaways
-- **CRUD Operations**: Full Create, Read, Update, Delete functionality
-- **Persistent Storage**: SQLite database for reliable data persistence
-- **Modern UI**: Clean, responsive interface with Tailwind CSS
-- **RESTful API**: Well-documented API endpoints with automatic OpenAPI docs
-
-## Tech Stack
-
-**Backend:**
-- Python 3.9+
-- FastAPI (web framework)
-- SQLite (database)
-- Groq API (AI summarization)
-- youtube-transcript-api (transcript extraction)
-
-**Frontend:**
-- HTML5
-- Tailwind CSS
-- Vanilla JavaScript
-
-**Testing:**
-- Pytest
-- Coverage.py (90%+ code coverage)
-
-## Installation
-
-### Prerequisites
-
-- Python 3.9 or higher
-- Git
-- Groq API key ([Get one here](https://console.groq.com))
-
-### Setup Instructions
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/dianacord/stash.git
-   cd stash
-   ```
-
-2. **Create and activate virtual environment**
-   ```bash
-   # Create virtual environment
-   python3 -m venv venv
-   
-   # Activate it
-   # On macOS/Linux:
-   source venv/bin/activate
-   
-   # On Windows:
-   venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Configure environment variables**
-   ```bash
-   # Create .env file from example
-   cp .env.example .env
-   
-   # Edit .env and add your Groq API key
-   # GROQ_API_KEY=your_groq_api_key_here
-   ```
-
-5. **Initialize database**
-   ```bash
-   # Database will be created automatically on first run
-   # No manual setup needed
-   ```
-
-## Running the Application
-
-### Start the Backend Server
-
-```bash
-# From project root directory
-uvicorn backend.main:app --reload --port 8080
+## 2. Repository / Folder Structure
+```
+├── backend/                # FastAPI app (routes in main.py, DI in dependencies.py)
+│   ├── main.py             # Entrypoint + HTTP controllers
+│   ├── metrics.py          # Prometheus metrics service & endpoint path
+│   ├── dependencies.py     # ServiceContainer (dependency injection)
+│   ├── protocols.py        # Structural typing (Protocols) for inversion
+│   └── services/           # Business + infrastructure services
+│       ├── auth_service.py     # JWT creation & password hashing
+│       ├── user_service.py     # Auth/business logic layer
+│       ├── database.py         # SQLite persistence (users + saved_videos)
+│       ├── youtube_fetcher.py  # Transcript retrieval & normalization
+│       └── groq_summarizer.py  # AI summarization (optional if key present)
+├── frontend/               # Thin static UI served separately (index.html)
+├── tests/                  # Unit + integration tests (services + API)
+├── Dockerfile              # Production container image definition
+├── requirements*.txt       # Runtime / dev dependencies
+├── pyproject.toml          # Project metadata (if needed for tooling)
+├── docs/                   # Diagrams or supplementary documentation
+└── htmlcov/                # Generated coverage HTML (after CI/test run)
 ```
 
-The server will start at `http://localhost:8080`
-
-### Access the Application
-
-- **Web Interface**: http://localhost:8080 (open `frontend/index.html` in browser)
-- **API Documentation**: http://localhost:8080/docs (interactive Swagger UI)
-- **Alternative API Docs**: http://localhost:8080/redoc
-- **Health Check**: http://localhost:8080/api/health
-
-### Using the Web Interface
-
-1. Open `frontend/index.html` in your web browser
-2. Paste any YouTube URL in the search box
-3. Click "Save & Summarize"
-4. Wait for AI processing (usually 5-10 seconds)
-5. View your organized summaries below
-
-## Running Tests
-
-### Run All Tests
-
+## 3. Clone & Local Setup
+Prerequisites: Python 3.12+, Git.
 ```bash
-# Run tests with verbose output
-PYTHONPATH=. pytest tests/ -v
+git clone https://github.com/dianacord/stash.git
+cd stash
+python3 -m venv venv
+source venv/bin/activate  # macOS/Linux
+# Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env  # then edit values
 ```
+SQLite database (`stash.db`) auto-creates on first run.
 
-### Check Code Coverage
-
+## 4. Run Locally
 ```bash
-# Run tests with coverage report
-PYTHONPATH=. pytest tests/ -v --cov=backend --cov-report=html --cov-report=term
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+```
+Access:
+- API Docs (Swagger): http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+- Health: http://localhost:8000/api/health
+- Metrics: http://localhost:8000/api/metrics
+Frontend: open `frontend/index.html` directly or serve via a simple static server (the root `/` returns the file through FastAPI).
 
-# Open HTML coverage report
+## 5. Tests & Coverage
+Run full suite:
+```bash
+PYTHONPATH=. pytest -v
+```
+Coverage (threshold > 70% enforced conceptually in CI):
+```bash
+PYTHONPATH=. pytest -v --cov=backend --cov-report=term --cov-report=html
 open htmlcov/index.html  # macOS
-# or
-start htmlcov/index.html  # Windows
-# or
-xdg-open htmlcov/index.html  # Linux
+```
+Targeted tests:
+```bash
+PYTHONPATH=. pytest tests/test_api.py::test_save_video_transcript_success -v
 ```
 
-**Current Coverage**: 90%
-
-### Run Specific Tests
-
+## 6. Docker: Build & Run Locally
+Dockerfile produces a slim Python 3.12 image.
 ```bash
-# Test specific module
-PYTHONPATH=. pytest tests/test_api.py -v
-
-# Test specific function
-PYTHONPATH=. pytest tests/test_api.py::test_save_video_success -v
+docker build -t stash:local .
+docker run --rm -p 8000:8000 --env-file .env stash:local
+```
+Then visit http://localhost:8000/api/health. Image uses `uvicorn backend.main:app --port 8000`. For iterative dev you can mount code:
+```bash
+docker run -p 8000:8000 --env-file .env -v "$PWD/backend":/app/backend stash:local
 ```
 
-## API Endpoints
+## 7. Continuous Integration (CI)
+Trigger: Pull Request or push to `main`.
+Typical jobs:
+| Job | Purpose |
+|-----|---------|
+| `setup-python` | Install Python & dependencies. |
+| `lint` (optional) | Placeholder for style/type checks. |
+| `test` | Run `pytest` + generate coverage. Fails if coverage < 70%. |
+| `docker-build` | Build container image (no push on PR). |
+Artifacts: coverage summary & HTML report (if uploaded). CI ensures code quality before merge.
 
-### Core Operations
+## 8. Continuous Deployment (CD)
+Trigger: Push to `main` after CI success.
+Steps (conceptual workflow):
+1. Authenticate to Azure (`azure/login` using federated credentials or stored secret).
+2. `az acr login` (Azure Container Registry).
+3. Build image: `docker build -t $ACR_LOGIN_SERVER/stash:${{ github.sha }} .`.
+4. Push image: `docker push $ACR_LOGIN_SERVER/stash:${{ github.sha }}`.
+5. Update Web App: `az webapp config container set ...` OR use `azure/webapps-deploy` action (runtime image reference from ACR).
+Branch protection: Only `main` deploys; PRs run CI only. Rollback: redeploy prior image tag.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/videos` | Save new video with AI summary |
-| `GET` | `/api/videos` | Get all saved videos |
-| `GET` | `/api/videos/{video_id}` | Get specific video by ID |
-| `PUT` | `/api/videos/{id}` | Update video summary or metadata |
-| `DELETE` | `/api/videos/{id}` | Delete video entry |
-| `GET` | `/api/health` | Health check endpoint |
+## 9. Environment Variables / Secrets
+Application `.env` (runtime):
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GROQ_API_KEY` | Optional | Enables AI summarization (if absent, app still works). |
+| `SECRET_KEY` | Recommended | JWT signing key (defaults to dev key if unset). |
 
-### Example API Usage
+GitHub Actions Secrets (example set):
+| Secret | Purpose |
+|--------|---------|
+| `GROQ_API_KEY` | Inject for tests using summarizer (optional). |
+| `SECRET_KEY` | Secure non-default JWT key in CI/CD. |
+| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | Service principal for Azure login. |
+| `AZURE_CLIENT_SECRET` | Credential for service principal (unless using OIDC). |
+| `ACR_LOGIN_SERVER` | Registry hostname (e.g., `myregistry.azurecr.io`). |
+| `AZURE_RESOURCE_GROUP` | Resource group for Web App + ACR. |
+| `AZURE_WEBAPP_NAME` | Target Azure App Service name. |
+| `SCRAPER_API_KEY` | Optional proxy API key (experimental transcript fetching). |
 
-**Save a video:**
+Sample `.env`:
+```env
+SECRET_KEY=change-me-in-production
+GROQ_API_KEY=sk_groq_...
+```
+
+## 10. Monitoring Endpoints
+| Endpoint | Purpose |
+|----------|---------|
+| `/api/health` | Lightweight status + whether summarizer initialized. |
+| `/api/metrics` | Prometheus exposition format with counters/histograms. |
+
+Prometheus Metrics Implemented:
+- `http_requests_total{method,path,status_code}` – request volume.
+- `http_request_duration_seconds{...}` – latency histogram buckets.
+- `http_errors_total{...}` – 4xx/5xx counts.
+These support alerting (error spike) & SLO evaluation (latency).
+
+## 11. Deployed Application
+Azure App Service (Container) URL (replace if changed):
+```
+https://<your-webapp-name>.azurewebsites.net
+```
+Health check in production: `https://<your-webapp-name>.azurewebsites.net/api/health`.
+If using a custom domain, update DNS + add binding; steps unchanged.
+
+## 12. Troubleshooting & Common Issues
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| 401 on video endpoints | Missing/invalid JWT | Sign up/login first; pass `Authorization: Bearer <token>`. |
+| "GROQ_API_KEY not found" | Key absent in environment | Add to `.env` or GitHub secret. |
+| Empty summary field | Summarizer unavailable | Check health endpoint; ensure `GROQ_API_KEY` valid. |
+| Transcript failures | Video lacks captions | Try a different video or language variant. |
+| Coverage < 70% in CI | New code untested | Add tests; run `pytest --cov` locally. |
+| Azure deploy fails on login | Wrong SP credentials | Re-create service principal / verify tenant & subscription IDs. |
+| ACR push denied | Missing permission | Assign `AcrPush` role to service principal. |
+
+General Debug Commands:
 ```bash
-curl -X POST http://localhost:8080/api/videos \
+uvicorn backend.main:app --reload
+curl localhost:8000/api/health
+curl -H "Authorization: Bearer $TOKEN" localhost:8000/api/videos
+```
+
+## API Quick Reference
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/auth/signup` | No | Register + return token |
+| POST | `/api/auth/login` | No | Authenticate + return token |
+| GET | `/api/auth/me` | Yes | Current user info |
+| POST | `/api/videos` | Yes | Save video (transcript + summary) |
+| GET | `/api/videos` | Yes | List user videos |
+| GET | `/api/videos/{video_id}` | Yes | Single video |
+| PUT | `/api/videos/{video_id}` | Yes | Update video title/summary |
+| DELETE | `/api/videos/{video_id}` | Yes | Remove video |
+| GET | `/api/health` | No | Service health |
+| GET | `/api/metrics` | No | Prometheus metrics |
+
+Example (save video):
+```bash
+TOKEN=<jwt>
+curl -X POST http://localhost:8000/api/videos \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
-**Get all videos:**
-```bash
-curl http://localhost:8080/api/videos
-```
+## Code Quality Highlights
+- SOLID: Controllers thin; services encapsulate logic; protocols enable inversion.
+- Dependency Injection: `ServiceContainer` centralizes creation allowing graceful failure if optional summarizer absent.
+- Reduced Coupling: Business logic isolated from HTTP specifics (testable in isolation).
+- Error Handling Strategy: Service returns structured dicts → HTTP layer maps to status codes.
 
-**Update a video:**
-```bash
-curl -X PUT http://localhost:8080/api/videos/1 \
-  -H "Content-Type: application/json" \
-  -d '{"ai_summary": "Updated summary text"}'
-```
+## Future Improvements
+- Background task queue for longer summaries.
+- Pagination & search APIs.
+- Structured tagging & filtering.
+- OpenTelemetry traces integrated with metrics.
+- Multi-stage Docker build (wheels compile vs runtime) if build time grows.
 
-**Delete a video:**
-```bash
-curl -X DELETE http://localhost:8080/api/videos/1
-```
-
-## Project Structure
-
-```
-stash/
-├── backend/
-│   ├── __init__.py
-│   ├── main.py                    # FastAPI application + routes
-│   └── services/
-│       ├── __init__.py
-│       ├── auth_service.py        # User authentication service
-│       ├── database.py            # SQLite database service
-│       ├── groq_summarizer.py     # AI summarization service
-│       └── youtube_fetcher.py     # YouTube transcript extraction
-├── frontend/
-│   └── index.html                 # Web interface (HTML + JS + CSS)
-├── tests/
-│   ├── conftest.py                # Pytest fixtures and configuration
-│   ├── test_api.py                # API endpoint tests
-│   ├── test_auth_service.py       # Authentication tests
-│   ├── test_database.py           # Database operation tests
-│   ├── test_groq_summarizer.py    # AI service tests
-│   └── test_youtube_fetcher.py    # YouTube service tests
-├── docs/                          # Documentation and diagrams
-├── .env.example                   # Environment variables template
-├── .coveragerc                    # Coverage configuration
-├── .gitignore                     # Git ignore rules
-├── requirements.txt               # Python dependencies
-├── stash.db                       # SQLite database (created on first run)
-└── README.md                      # This file
-```
-
-## Configuration
-
-### Environment Variables
-
-Create a `.env` file in the project root:
-
-```env
-# Groq API (Required)
-GROQ_API_KEY=your_groq_api_key_here
-
-```
-
-### Database
-
-The application uses SQLite with the following schema:
-
-```sql
-saved_videos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    url TEXT NOT NULL,
-    video_id TEXT NOT NULL UNIQUE,
-    platform TEXT DEFAULT 'youtube',
-    title TEXT,
-    raw_transcript TEXT,
-    ai_summary TEXT,
-    language TEXT,
-    is_generated BOOLEAN,
-    segments_count INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-```
-
-Database file: `stash.db` (created automatically)
-
-## Troubleshooting
-
-### Common Issues
-
-**"ModuleNotFoundError: No module named 'backend'"**
-```bash
-# Make sure you're using PYTHONPATH
-PYTHONPATH=. pytest tests/ -v
-# or run from project root
-```
-
-**"GROQ_API_KEY not found"**
-```bash
-# Check your .env file exists and has the key
-cat .env
-# Make sure you've activated the virtual environment
-```
-
-**"Video transcript not available"**
-- Not all YouTube videos have transcripts/captions
-- Try a different video with closed captions enabled
-- Check if the video is publicly accessible
-
-**Tests failing with database errors**
-```bash
-# Clean up test databases
-rm test_*.db
-# Run tests again
-PYTHONPATH=. pytest tests/ -v
-```
-
-## Future Enhancements
-
-- Multi-platform support (TikTok, Twitter, LinkedIn)
-- Tag-based content organization
-- Full-text search across transcripts and summaries
-- Export functionality (PDF, Markdown)
-- Browser extension for one-click saving
-- Real-time collaboration features
-
-## Development
-
-### Code Quality
-
-- Type hints used throughout codebase
-- Comprehensive docstrings
-- 90%+ test coverage
-- Clean architecture with separation of concerns
-- RESTful API design principles
-
-### Design Patterns
-
-- Repository Pattern (database abstraction)
-- Service Layer Pattern (business logic)
-- Factory Pattern (service instantiation)
-- MVC architecture (separation of concerns)
-
-## License
-
-This project is part of an academic assignment for the Software Development and DevOps course.
+## License / Academic Context
+Produced for a university DevOps assignment (Assignment 2) – educational use only.
 
 ## Author
-
-**Diana Cordovez**
-- Course: Software Development and DevOps
-- Date: September/October 2025
-- Assignment: Individual Assignment 1
+**Diana Cordovez** – Software Development & DevOps Course (2025)
 
 ## Acknowledgments
-
-- FastAPI for excellent documentation and framework
-- Groq for AI API access
-- youtube-transcript-api for transcript extraction
-- Tailwind CSS for styling utilities
+FastAPI, Groq, youtube-transcript-api, Prometheus client, Uvicorn.
 
 ---
-
-**Note**: This application is designed for educational purposes as part of a software development course. It demonstrates CRUD operations, API integration, database design, and modern web development practices.
+This README emphasizes operational & DevOps aspects (CI/CD, monitoring, containerization) added to the original application.
