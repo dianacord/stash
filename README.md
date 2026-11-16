@@ -75,8 +75,9 @@ Stash solves the common problem of saving videos for later but never revisiting 
    # Create .env file from example
    cp .env.example .env
    
-   # Edit .env and add your Groq API key
+   # Edit .env and add your Groq API key and a JWT signing key
    # GROQ_API_KEY=your_groq_api_key_here
+   # SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
    ```
 
 5. **Initialize database**
@@ -226,6 +227,9 @@ Create a `.env` file in the project root:
 # Groq API (Required)
 GROQ_API_KEY=your_groq_api_key_here
 
+# JWT signing key (Required). The app won't start without it.
+SECRET_KEY=replace_with_a_long_random_string
+
 ```
 
 ### Database
@@ -261,6 +265,10 @@ Database file: `stash.db` (created automatically)
 PYTHONPATH=. pytest tests/ -v
 # or run from project root
 ```
+
+**"SECRET_KEY is not set"**
+The app needs a JWT signing key. Add `SECRET_KEY` to `.env` locally, or as an
+App Service application setting in production.
 
 **"GROQ_API_KEY not found"**
 ```bash

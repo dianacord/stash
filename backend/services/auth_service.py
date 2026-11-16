@@ -8,9 +8,23 @@ from passlib.context import CryptContext
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT settings
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+
+def get_secret_key() -> str:
+    """Return the JWT signing key, or fail if it isn't set.
+
+    There is deliberately no default: a default key in this public repo would
+    let anyone sign their own tokens and log in as any user.
+    """
+    key = os.getenv("SECRET_KEY")
+    if not key:
+        raise RuntimeError(
+            "SECRET_KEY is not set. Set it to a long random string, for example "
+            "in .env (see README)."
+        )
+    return key
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -32,14 +46,14 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, get_secret_key(), algorithm=ALGORITHM)
     return encoded_jwt
 
 
 def verify_token(token: str) -> dict | None:
     """Verify JWT token and return payload"""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, get_secret_key(), algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         user_id: int = payload.get("user_id")
 

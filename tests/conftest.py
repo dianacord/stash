@@ -6,6 +6,9 @@ import pytest
 from backend.dependencies import ServiceContainer
 from backend.services.database import DatabaseService
 
+# Tests sign their own tokens; production must set a real SECRET_KEY.
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
+
 
 @pytest.fixture(autouse=True)
 def setup_test_db():

@@ -20,11 +20,13 @@ from backend.dependencies import (
     get_video_service,
 )
 from backend.metrics import METRICS_PATH, MetricsService
-from backend.services.auth_service import verify_token
+from backend.services.auth_service import get_secret_key, verify_token
 from backend.services.user_service import AuthService
 from backend.services.video_service import VideoService
 
 load_dotenv()
+# Fail at startup, not at the first login, if the JWT signing key is missing.
+get_secret_key()
 
 app = FastAPI(title="Stash API", description="Video Content Organizer")
 
