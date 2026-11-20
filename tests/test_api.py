@@ -51,12 +51,20 @@ def test_health_check():
     assert response.json()["status"] == "healthy"
 
 
-def test_liveness_needs_no_dependencies():
-    """Liveness must not touch the database, so it stays up during a DB outage."""
-    with patch("backend.main.get_container", side_effect=AssertionError("touched deps")):
-        response = client.get("/healthz")
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+def test_probes_while_database_is_unreachable(monkeypatch):
+    """On Kubernetes, Stash can start before Postgres is up.
+
+    Liveness must still pass (or the kubelet restarts healthy pods), and
+    readiness must report 503, not crash. Builds a real container against an
+    unreachable database so every request runs through the real middleware.
+    """
+    from backend import dependencies
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x:x@127.0.0.1:1/x")
+    monkeypatch.setattr(dependencies, "_container", None)
+
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/readyz").status_code == 503
 
 
 def test_readiness_ok_when_database_up():

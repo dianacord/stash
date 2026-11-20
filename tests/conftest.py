@@ -19,8 +19,10 @@ TEST_DATABASE_URL = os.getenv(
 
 @pytest.fixture(scope="session")
 def _test_db_service():
-    """Connect once per test session; this also creates the tables."""
-    return DatabaseService(dsn=TEST_DATABASE_URL)
+    """Connect once per test session and create the tables."""
+    service = DatabaseService(dsn=TEST_DATABASE_URL)
+    assert service.ping(), f"Test database not reachable at {TEST_DATABASE_URL}"
+    return service
 
 
 @pytest.fixture(autouse=True)

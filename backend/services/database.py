@@ -21,15 +21,24 @@ def get_database_url() -> str:
 
 class DatabaseService:
     def __init__(self, dsn: str | None = None):
+        # Don't connect here. On Kubernetes the app can start before Postgres
+        # is up, and the app must still boot and answer its probes meanwhile.
+        # Tables are created on first use instead (see _connect).
         self.dsn = dsn or get_database_url()
-        self._init_database()
+        self._schema_ready = False
 
-    def _connect(self) -> psycopg.Connection:
+    def _open(self) -> psycopg.Connection:
         """Open a connection that returns rows as dicts.
 
         Used as a context manager: commits on success, rolls back on error.
         """
         return psycopg.connect(self.dsn, row_factory=dict_row, connect_timeout=5)
+
+    def _connect(self) -> psycopg.Connection:
+        """Open a connection, creating the tables first if this is the first use."""
+        if not self._schema_ready:
+            self._init_database()
+        return self._open()
 
     def ping(self) -> bool:
         """Return True if the database answers a trivial query."""
@@ -47,7 +56,7 @@ class DatabaseService:
         EXISTS can still collide in Postgres, so schema setup runs under an
         advisory lock that only one connection can hold at a time.
         """
-        with self._connect() as conn:
+        with self._open() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_ID,))
 
             conn.execute("""
@@ -81,6 +90,7 @@ class DatabaseService:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_created_at ON saved_videos(created_at DESC)"
             )
+        self._schema_ready = True
 
     def save_video(self, video_data: dict[str, Any], user_id: int) -> dict[str, Any]:
         """Save a video to the database with user_id"""

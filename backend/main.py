@@ -332,7 +332,7 @@ def readiness():
     try:
         db_ok = get_container().db_service.ping()
     except Exception:
-        # The container connects to the database when it is first built.
+        # e.g. the container can't be built because DATABASE_URL is missing.
         db_ok = False
     if not db_ok:
         return JSONResponse(status_code=503, content={"status": "not ready", "database": False})
