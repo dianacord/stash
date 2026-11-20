@@ -107,7 +107,7 @@ Application `.env` (runtime):
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GROQ_API_KEY` | Optional | Enables AI summarization (if absent, app still works). |
-| `SECRET_KEY` | Recommended | JWT signing key (defaults to dev key if unset). |
+| `SECRET_KEY` | Required | JWT signing key. The app refuses to start without it. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
 
 GitHub Actions Secrets (example set):
 | Secret | Purpose |
@@ -123,7 +123,7 @@ GitHub Actions Secrets (example set):
 
 Sample `.env`:
 ```env
-SECRET_KEY=change-me-in-production
+SECRET_KEY=replace_with_a_long_random_string
 GROQ_API_KEY=sk_groq_...
 ```
 
@@ -151,6 +151,7 @@ If using a custom domain, update DNS + add binding; steps unchanged.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | 401 on video endpoints | Missing/invalid JWT | Sign up/login first; pass `Authorization: Bearer <token>`. |
+| "SECRET_KEY is not set" | JWT signing key missing | Add `SECRET_KEY` to `.env` (or the deployment's secrets). |
 | "GROQ_API_KEY not found" | Key absent in environment | Add to `.env` or GitHub secret. |
 | Empty summary field | Summarizer unavailable | Check health endpoint; ensure `GROQ_API_KEY` valid. |
 | Transcript failures | Video lacks captions | Try a different video or language variant. |
