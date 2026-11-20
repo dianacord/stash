@@ -117,9 +117,17 @@ jobs:
             -H 'Content-Type: application/json' -d '{"username":"ci-user","password":"ci-pass-123"}'
           kubectl delete pod postgres-0
           kubectl wait --for=condition=Ready pod/postgres-0 --timeout=120s
-          kubectl wait --for=condition=Ready pod -l app=stash --timeout=60s
-          curl -fsS -X POST localhost:8081/api/auth/login \
-            -H 'Content-Type: application/json' -d '{"username":"ci-user","password":"ci-pass-123"}'
+          # Pods can still look ready for a few seconds after Postgres comes
+          # back (probes run every 5s), so retry. A lost user would never log in.
+          for i in $(seq 1 30); do
+            if curl -fsS -X POST localhost:8081/api/auth/login \
+                 -H 'Content-Type: application/json' \
+                 -d '{"username":"ci-user","password":"ci-pass-123"}'; then
+              echo; echo "login OK after Postgres restart (attempt $i)"; exit 0
+            fi
+            sleep 2
+          done
+          echo "user did not survive the Postgres restart"; exit 1
 
       - name: Show cluster state on failure
         if: failure()
