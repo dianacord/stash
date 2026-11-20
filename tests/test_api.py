@@ -51,6 +51,34 @@ def test_health_check():
     assert response.json()["status"] == "healthy"
 
 
+def test_liveness_needs_no_dependencies():
+    """Liveness must not touch the database, so it stays up during a DB outage."""
+    with patch("backend.main.get_container", side_effect=AssertionError("touched deps")):
+        response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_readiness_ok_when_database_up():
+    response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "database": True}
+
+
+def test_readiness_503_when_database_down(test_db):
+    with patch.object(test_db, "ping", return_value=False):
+        response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["database"] is False
+
+
+def test_readiness_503_when_container_cannot_start():
+    """At startup the container itself fails to build if Postgres is unreachable."""
+    with patch("backend.main.get_container", side_effect=RuntimeError("db down")):
+        response = client.get("/readyz")
+    assert response.status_code == 503
+
+
 def test_get_all_videos():
     """Test getting all videos with auth"""
     headers = get_auth_headers()

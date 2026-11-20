@@ -1,39 +1,67 @@
-import sqlite3
+import os
 from typing import Any
+
+import psycopg
+from psycopg.rows import dict_row
+
+# Any constant works; it just has to be the same in every replica.
+_SCHEMA_LOCK_ID = 7_824_001
+
+
+def get_database_url() -> str:
+    """Return the Postgres connection string, or fail if it isn't set."""
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is not set. Point it at Postgres, for example "
+            "postgresql://stash:stash@localhost:5432/stash (see README)."
+        )
+    return url
 
 
 class DatabaseService:
-    def __init__(self, db_path: str = "stash.db"):
-        self.db_path = db_path
+    def __init__(self, dsn: str | None = None):
+        self.dsn = dsn or get_database_url()
         self._init_database()
 
-    def _connect(self) -> sqlite3.Connection:
-        """Create a connection with row_factory set to sqlite3.Row."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> psycopg.Connection:
+        """Open a connection that returns rows as dicts.
+
+        Used as a context manager: commits on success, rolls back on error.
+        """
+        return psycopg.connect(self.dsn, row_factory=dict_row, connect_timeout=5)
+
+    def ping(self) -> bool:
+        """Return True if the database answers a trivial query."""
+        try:
+            with self._connect() as conn:
+                conn.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     def _init_database(self):
-        """Create tables if they don't exist"""
-        with self._connect() as conn:
-            cursor = conn.cursor()
+        """Create tables if they don't exist.
 
-            # users table
-            cursor.execute("""
+        Several replicas can start at once, and concurrent CREATE TABLE IF NOT
+        EXISTS can still collide in Postgres, so schema setup runs under an
+        advisory lock that only one connection can hold at a time.
+        """
+        with self._connect() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_ID,))
+
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     username TEXT NOT NULL UNIQUE,
                     hashed_password TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_username ON users(username)")
-
-            # saved videos table with user_id column
-            cursor.execute("""
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS saved_videos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     url TEXT NOT NULL,
                     video_id TEXT NOT NULL UNIQUE,
                     platform TEXT DEFAULT 'youtube',
@@ -43,16 +71,14 @@ class DatabaseService:
                     language TEXT,
                     is_generated BOOLEAN,
                     segments_count INTEGER,
-                    user_id INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
+                    user_id INTEGER REFERENCES users(id),
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_id ON saved_videos(video_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON saved_videos(user_id)")
-            cursor.execute(
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON saved_videos(user_id)")
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_created_at ON saved_videos(created_at DESC)"
             )
 
@@ -60,13 +86,14 @@ class DatabaseService:
         """Save a video to the database with user_id"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                row = conn.execute(
                     """
                     INSERT INTO saved_videos
-                    (url, video_id, platform, raw_transcript, ai_summary, language, is_generated, segments_count, user_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                    (url, video_id, platform, raw_transcript, ai_summary, language,
+                     is_generated, segments_count, user_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
                     (
                         video_data["url"],
                         video_data["video_id"],
@@ -78,17 +105,9 @@ class DatabaseService:
                         video_data.get("segments_count"),
                         user_id,
                     ),
-                )
-
-                new_id = cursor.lastrowid
-                cursor.execute("SELECT * FROM saved_videos WHERE id = ?", (new_id,))
-                row = cursor.fetchone()
-
-                if row:
-                    return {"success": True, "data": dict(row)}
-                else:
-                    return {"success": False, "error": "Video inserted but could not retrieve"}
-        except sqlite3.IntegrityError as e:
+                ).fetchone()
+                return {"success": True, "data": row}
+        except psycopg.errors.UniqueViolation as e:
             return {"success": False, "error": f"Video already exists: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -97,13 +116,10 @@ class DatabaseService:
         """Get all videos for a specific user"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM saved_videos WHERE user_id = ? ORDER BY created_at DESC",
+                return conn.execute(
+                    "SELECT * FROM saved_videos WHERE user_id = %s ORDER BY created_at DESC",
                     (user_id,),
-                )
-                rows = cursor.fetchall()
-                return [dict(row) for row in rows]
+                ).fetchall()
         except Exception:
             return []
 
@@ -111,10 +127,9 @@ class DatabaseService:
         """Get video by YouTube video ID"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM saved_videos WHERE video_id = ?", (video_id,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
+                return conn.execute(
+                    "SELECT * FROM saved_videos WHERE video_id = %s", (video_id,)
+                ).fetchone()
         except Exception:
             return None
 
@@ -122,10 +137,9 @@ class DatabaseService:
         """Get all saved videos"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM saved_videos ORDER BY created_at DESC")
-                rows = cursor.fetchall()
-                return [dict(row) for row in rows]
+                return conn.execute(
+                    "SELECT * FROM saved_videos ORDER BY created_at DESC"
+                ).fetchall()
         except Exception:
             return []
 
@@ -133,22 +147,16 @@ class DatabaseService:
         """Create a new user"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                row = conn.execute(
                     """
                     INSERT INTO users (username, hashed_password)
-                    VALUES (?, ?)
-                """,
+                    VALUES (%s, %s)
+                    RETURNING id, username, created_at
+                    """,
                     (username, hashed_password),
-                )
-                new_id = cursor.lastrowid
-                cursor.execute("SELECT id, username, created_at FROM users WHERE id = ?", (new_id,))
-                row = cursor.fetchone()
-                if row:
-                    return {"success": True, "data": dict(row)}
-                else:
-                    return {"success": False, "error": "User created but could not retrieve"}
-        except sqlite3.IntegrityError:
+                ).fetchone()
+                return {"success": True, "data": row}
+        except psycopg.errors.UniqueViolation:
             return {"success": False, "error": "Username already exists"}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -157,10 +165,9 @@ class DatabaseService:
         """Get user by username (includes hashed_password for auth)"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
+                return conn.execute(
+                    "SELECT * FROM users WHERE username = %s", (username,)
+                ).fetchone()
         except Exception:
             return None
 
@@ -168,12 +175,9 @@ class DatabaseService:
         """Get user by ID"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id, username, created_at FROM users WHERE id = ?", (user_id,)
-                )
-                row = cursor.fetchone()
-                return dict(row) if row else None
+                return conn.execute(
+                    "SELECT id, username, created_at FROM users WHERE id = %s", (user_id,)
+                ).fetchone()
         except Exception:
             return None
 
@@ -181,39 +185,36 @@ class DatabaseService:
         """Delete a video by ID"""
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM saved_videos WHERE video_id = ?", (video_id,))
+                cursor = conn.execute("DELETE FROM saved_videos WHERE video_id = %s", (video_id,))
                 if cursor.rowcount > 0:
                     return {"success": True}
-                else:
-                    return {"success": False, "error": "Video not found"}
+                return {"success": False, "error": "Video not found"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def update_video(self, video_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update video fields"""
+        # Only allow updating certain fields. Field names come from this fixed
+        # list, never from the caller, so formatting them into the SQL is safe.
+        allowed_fields = ["ai_summary", "title"]
+        update_parts = []
+        values = []
+        for field in allowed_fields:
+            if field in updates:
+                update_parts.append(f"{field} = %s")
+                values.append(updates[field])
+        if not update_parts:
+            return {"success": False, "error": "No valid fields to update"}
+        values.append(video_id)
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                # Only allow updating certain fields
-                allowed_fields = ["ai_summary", "title"]
-                update_parts = []
-                values = []
-                for field in allowed_fields:
-                    if field in updates:
-                        update_parts.append(f"{field} = ?")
-                        values.append(updates[field])
-                if not update_parts:
-                    return {"success": False, "error": "No valid fields to update"}
-                values.append(video_id)
-                query = f"UPDATE saved_videos SET {', '.join(update_parts)} WHERE video_id = ?"
-                cursor.execute(query, values)
-                # Get updated video
-                cursor.execute("SELECT * FROM saved_videos WHERE video_id = ?", (video_id,))
-                row = cursor.fetchone()
+                row = conn.execute(
+                    f"UPDATE saved_videos SET {', '.join(update_parts)} "
+                    "WHERE video_id = %s RETURNING *",
+                    values,
+                ).fetchone()
                 if row:
-                    return {"success": True, "data": dict(row)}
-                else:
-                    return {"success": False, "error": "Video not found"}
+                    return {"success": True, "data": row}
+                return {"success": False, "error": "Video not found"}
         except Exception as e:
             return {"success": False, "error": str(e)}

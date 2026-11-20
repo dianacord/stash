@@ -1,5 +1,4 @@
-import sqlite3
-
+import psycopg
 import pytest
 
 from backend.services.database import DatabaseService
@@ -10,7 +9,7 @@ def test_get_user_videos_handles_exception(monkeypatch):
     monkeypatch.setattr(DatabaseService, "_init_database", lambda self: None)
 
     # Create instance with no-op init
-    db = DatabaseService(db_path=":memory:")
+    db = DatabaseService(dsn="postgresql://unused")
 
     # Force _connect to raise to simulate DB outage
     def raise_connect(self):  # pragma: no cover - tiny utility
@@ -28,11 +27,7 @@ def test_save_video_integrity_error_is_mapped(monkeypatch):
 
     class DummyCursor:
         def execute(self, *args, **kwargs):
-            raise sqlite3.IntegrityError("duplicate")
-
-        @property
-        def lastrowid(self):
-            return 1
+            raise psycopg.errors.UniqueViolation("duplicate")
 
     class DummyConn:
         def __enter__(self):
@@ -41,12 +36,12 @@ def test_save_video_integrity_error_is_mapped(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def cursor(self):
-            return DummyCursor()
+        def execute(self, *args, **kwargs):
+            return DummyCursor().execute(*args, **kwargs)
 
     monkeypatch.setattr(DatabaseService, "_connect", lambda self: DummyConn())
 
-    db = DatabaseService(db_path=":memory:")
+    db = DatabaseService(dsn="postgresql://unused")
 
     res = db.save_video(
         {
@@ -60,3 +55,21 @@ def test_save_video_integrity_error_is_mapped(monkeypatch):
 
     assert res["success"] is False
     assert "already exists" in res["error"].lower()
+
+
+def test_ping_returns_false_when_database_is_down(monkeypatch):
+    monkeypatch.setattr(DatabaseService, "_init_database", lambda self: None)
+    db = DatabaseService(dsn="postgresql://unused")
+
+    def raise_connect(self):
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(DatabaseService, "_connect", raise_connect)
+
+    assert db.ping() is False
+
+
+def test_missing_database_url_fails_loudly(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        DatabaseService()

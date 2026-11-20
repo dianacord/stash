@@ -5,7 +5,8 @@ from backend.services.database import DatabaseService
 
 def test_database_initialization(test_db):
     """Test database creates tables correctly"""
-    assert test_db.db_path == "test_global.db"
+    assert test_db.ping() is True
+    assert test_db.get_all_videos() == []
 
 
 def test_save_video(test_db, sample_video_data):

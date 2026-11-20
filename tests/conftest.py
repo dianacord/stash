@@ -1,6 +1,6 @@
 import os
-import sqlite3
 
+import psycopg
 import pytest
 
 from backend.dependencies import ServiceContainer
@@ -9,53 +9,30 @@ from backend.services.database import DatabaseService
 # Tests sign their own tokens; production must set a real SECRET_KEY.
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
+# Tests need a real Postgres (CI starts one as a service container). Locally:
+#   docker run -d --name stash-test-db -e POSTGRES_USER=stash -e POSTGRES_PASSWORD=stash \
+#     -e POSTGRES_DB=stash_test -p 5433:5432 pgvector/pgvector:pg17
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL", "postgresql://stash:stash@localhost:5433/stash_test"
+)
+
+
+@pytest.fixture(scope="session")
+def _test_db_service():
+    """Connect once per test session; this also creates the tables."""
+    return DatabaseService(dsn=TEST_DATABASE_URL)
+
 
 @pytest.fixture(autouse=True)
-def setup_test_db():
+def setup_test_db(_test_db_service):
     """
     Global test database fixture - automatically runs for ALL tests.
-    Creates fresh test database with users and saved_videos tables.
+    Empties every table so each test starts from a clean database.
     """
-    test_db_path = "test_global.db"
+    with psycopg.connect(TEST_DATABASE_URL) as conn:
+        conn.execute("TRUNCATE saved_videos, users RESTART IDENTITY CASCADE")
 
-    # Create test database
-    conn = sqlite3.connect(test_db_path)
-    cursor = conn.cursor()
-
-    # Create users table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            hashed_password TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Create saved_videos table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS saved_videos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT NOT NULL,
-            video_id TEXT NOT NULL UNIQUE,
-            platform TEXT DEFAULT 'youtube',
-            title TEXT,
-            raw_transcript TEXT,
-            ai_summary TEXT,
-            language TEXT,
-            is_generated BOOLEAN,
-            segments_count INTEGER,
-            user_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-    # Create test service container with test database
-    test_db_service = DatabaseService(db_path=test_db_path)
+    test_db_service = _test_db_service
 
     # Replace global container with test container
     from backend import dependencies
@@ -102,10 +79,6 @@ def setup_test_db():
 
     # Restore original container
     dependencies._container = original_container
-
-    # Cleanup after all tests
-    if os.path.exists(test_db_path):
-        os.remove(test_db_path)
 
 
 @pytest.fixture
