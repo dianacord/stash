@@ -1,0 +1,12 @@
+apiVersion: v1          # core API group (Deployments live in apps/v1)
+kind: Service
+metadata:
+  name: stash           # becomes the DNS name: http://stash:8000 inside the cluster
+spec:
+  type: NodePort        # also open a port on every node (kind maps 30080 → localhost:8080)
+  selector:
+    app: stash          # send traffic to every pod with this label, same as the Deployment's
+  ports:
+    - port: 8000        # the Service's own port
+      targetPort: 8000  # the container port traffic is forwarded to
+      nodePort: 30080   # the port opened on each node
