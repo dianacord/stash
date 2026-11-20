@@ -1,10 +1,13 @@
 import os
 
-import psycopg
-import pytest
+# No Datadog Agent in tests; keep the tracer from trying to send spans.
+os.environ.setdefault("DD_TRACE_ENABLED", "false")
 
-from backend.dependencies import ServiceContainer
-from backend.services.database import DatabaseService
+import psycopg  # noqa: E402
+import pytest  # noqa: E402
+
+from backend.dependencies import ServiceContainer  # noqa: E402
+from backend.services.database import DatabaseService  # noqa: E402
 
 # Tests sign their own tokens; production must set a real SECRET_KEY.
 os.environ.setdefault("SECRET_KEY", "test-secret-key")

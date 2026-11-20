@@ -31,6 +31,9 @@ spec:
     metadata:
       labels:
         app: postgres
+      annotations:
+        # Tag Postgres logs so Datadog parses them with its Postgres pipeline.
+        ad.datadoghq.com/postgres.logs: '[{"source": "postgresql", "service": "postgres"}]'
     spec:
       containers:
         - name: postgres
