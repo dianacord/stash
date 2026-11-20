@@ -9,7 +9,7 @@ import time
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -20,11 +20,13 @@ from backend.dependencies import (
     get_video_service,
 )
 from backend.metrics import METRICS_PATH, MetricsService
-from backend.services.auth_service import verify_token
+from backend.services.auth_service import get_secret_key, verify_token
 from backend.services.user_service import AuthService
 from backend.services.video_service import VideoService
 
 load_dotenv()
+# Fail at startup, not at the first login, if the JWT signing key is missing.
+get_secret_key()
 
 app = FastAPI(title="Stash API", description="Video Content Organizer")
 
@@ -308,6 +310,33 @@ def health_check():
         "service": "stash-api",
         "groq_summarizer": container.summarizer_available,
     }
+
+
+@app.get("/healthz")
+def liveness():
+    """Liveness probe: is the process up and serving HTTP?
+
+    Deliberately checks no dependencies. If it did, a database or Groq outage
+    would make Kubernetes restart every pod, which can't fix either.
+    """
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readiness():
+    """Readiness probe: can this pod serve real requests right now?
+
+    Checks the database only. Groq is optional (the app works without
+    summaries), so its outages must not take pods out of the load balancer.
+    """
+    try:
+        db_ok = get_container().db_service.ping()
+    except Exception:
+        # e.g. the container can't be built because DATABASE_URL is missing.
+        db_ok = False
+    if not db_ok:
+        return JSONResponse(status_code=503, content={"status": "not ready", "database": False})
+    return {"status": "ready", "database": True}
 
 
 # ============================================================================

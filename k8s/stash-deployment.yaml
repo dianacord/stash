@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stash
+spec:                    # ← about the DEPLOYMENT: how many copies, which pods are mine
+  replicas: 2
+  selector:
+    matchLabels: 
+      app: stash    # must match the template's labels below
+  template:              # ← the blueprint for each POD
+    metadata:
+      labels: 
+        app: stash
+    spec:                # ← about the POD: which containers it runs
+      containers:
+        - name: stash
+          image: stash:pg
+          ports: 
+            - containerPort: 8000
+          envFrom: 
+            - secretRef: 
+                name: stash-secrets
+          env:
+            # $(POSTGRES_PASSWORD) is filled in from the Secret above when the pod starts.
+            # "postgres" is the Postgres Service's name, resolved by cluster DNS.
+            - name: DATABASE_URL
+              value: postgresql://stash:$(POSTGRES_PASSWORD)@postgres:5432/stash
+          readinessProbe:            # fails → no traffic (checks the database)
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5   # give uvicorn time to boot
+            periodSeconds: 5
+          livenessProbe:             # fails → restart (checks only the process)
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5   # give uvicorn time to boot
+            periodSeconds: 10
+            failureThreshold: 3

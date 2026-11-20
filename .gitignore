@@ -32,3 +32,6 @@ instance/
 htmlcov/
 stash.db
 test_*.db
+
+# Kubernetes secrets (see k8s/secrets.env.example)
+k8s/secrets.env

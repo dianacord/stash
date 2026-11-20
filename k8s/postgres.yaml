@@ -1,0 +1,76 @@
+# Postgres for Stash: one pod with a disk that outlives it.
+#
+# A StatefulSet (not a Deployment) because a database needs a stable identity:
+# its pod is always "postgres-0", and it always reattaches the same volume.
+# A Deployment would treat pods as interchangeable and could start a second
+# copy on a different, empty disk.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres          # Stash connects to postgres:5432 through cluster DNS
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  # No "type": defaults to ClusterIP, reachable only from inside the cluster.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:0.8.0-pg17   # Postgres 17 + pgvector, for the RAG phase
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: stash
+            - name: POSTGRES_DB
+              value: stash
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: stash-secrets
+                  key: POSTGRES_PASSWORD
+            # The volume's root holds a lost+found folder on some storage
+            # backends, and Postgres refuses to initialize a non-empty dir.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "stash", "-d", "stash"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+  # One PersistentVolumeClaim per pod, created on first start and kept when
+  # the pod is deleted. This is what makes data survive restarts.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

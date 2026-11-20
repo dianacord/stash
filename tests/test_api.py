@@ -51,6 +51,42 @@ def test_health_check():
     assert response.json()["status"] == "healthy"
 
 
+def test_probes_while_database_is_unreachable(monkeypatch):
+    """On Kubernetes, Stash can start before Postgres is up.
+
+    Liveness must still pass (or the kubelet restarts healthy pods), and
+    readiness must report 503, not crash. Builds a real container against an
+    unreachable database so every request runs through the real middleware.
+    """
+    from backend import dependencies
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x:x@127.0.0.1:1/x")
+    monkeypatch.setattr(dependencies, "_container", None)
+
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/readyz").status_code == 503
+
+
+def test_readiness_ok_when_database_up():
+    response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "database": True}
+
+
+def test_readiness_503_when_database_down(test_db):
+    with patch.object(test_db, "ping", return_value=False):
+        response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["database"] is False
+
+
+def test_readiness_503_when_container_cannot_start():
+    """At startup the container itself fails to build if Postgres is unreachable."""
+    with patch("backend.main.get_container", side_effect=RuntimeError("db down")):
+        response = client.get("/readyz")
+    assert response.status_code == 503
+
+
 def test_get_all_videos():
     """Test getting all videos with auth"""
     headers = get_auth_headers()

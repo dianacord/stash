@@ -1,0 +1,17 @@
+# Deploy everything with:  kubectl apply -k k8s/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - postgres.yaml
+  - stash-deployment.yaml
+  - stash-service.yaml
+
+# Builds the "stash-secrets" Secret from k8s/secrets.env (gitignored; copy
+# secrets.env.example). Kustomize appends a hash of the contents to the name
+# and rewrites every reference to it, so changing a secret creates a new
+# Secret and rolls the pods that use it.
+secretGenerator:
+  - name: stash-secrets
+    envs:
+      - secrets.env
