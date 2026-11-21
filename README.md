@@ -7,7 +7,7 @@ Organize saved YouTube videos with transcript extraction, AI summarization, auth
 </div>
 
 ## 1. Overview
-Stash tackles the “save for later but never revisit” problem. Users save a YouTube URL; the backend extracts the transcript, optionally summarizes it via Groq’s Llama model, and persists structured information. This assignment extends the original app by adding: automated testing & coverage gates, Docker image builds, GitHub Actions CI/CD, secret management, health/metrics endpoints, and improved code quality (SOLID + dependency injection).
+Stash tackles the “save for later but never revisit” problem. Users save a YouTube URL; the backend extracts the transcript, optionally summarizes it via Groq (`openai/gpt-oss-120b`), and persists structured information. This assignment extends the original app by adding: automated testing & coverage gates, Docker image builds, GitHub Actions CI/CD, secret management, health/metrics endpoints, and improved code quality (SOLID + dependency injection).
 
 ## 2. Repository / Folder Structure
 ```

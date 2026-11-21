@@ -102,7 +102,7 @@ def test_summarize_records_llm_span(mock_groq, mock_tracer):
 
     assert result == {"success": True, "summary": "Test summary"}
     mock_tracer.trace.assert_called_once_with(
-        "groq.chat.completion", service="stash-groq", resource="llama-3.3-70b-versatile"
+        "groq.chat.completion", service="stash-groq", resource="openai/gpt-oss-120b"
     )
     span.set_metric.assert_any_call("llm.prompt_tokens", 120)
     span.set_metric.assert_any_call("llm.completion_tokens", 45)

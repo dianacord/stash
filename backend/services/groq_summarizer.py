@@ -4,9 +4,11 @@ from ddtrace.trace import tracer
 from groq import Groq
 
 # Defaults are centralized for easier tuning/testing
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+# Groq retired Llama 3.3 70B in 2026; gpt-oss-120b is the largest chat model it serves.
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_TEMPERATURE = 0.4
-DEFAULT_MAX_OUTPUT_TOKENS = 1000
+# gpt-oss is a reasoning model: its hidden reasoning counts toward this limit too.
+DEFAULT_MAX_OUTPUT_TOKENS = 2000
 
 
 class GroqSummarizer:
