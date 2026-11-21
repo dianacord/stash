@@ -2,6 +2,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: stash
+  labels:
+    # Datadog "Unified Service Tagging": the same env/service/version on
+    # metrics, logs and traces, so they can be linked to each other.
+    tags.datadoghq.com/env: local
+    tags.datadoghq.com/service: stash
+    tags.datadoghq.com/version: "0.2.0"
 spec:                    # ← about the DEPLOYMENT: how many copies, which pods are mine
   replicas: 2
   selector:
@@ -11,6 +17,23 @@ spec:                    # ← about the DEPLOYMENT: how many copies, which pods
     metadata:
       labels: 
         app: stash
+        tags.datadoghq.com/env: local
+        tags.datadoghq.com/service: stash
+        tags.datadoghq.com/version: "0.2.0"
+      annotations:
+        # Datadog Autodiscovery: tells the Agent on this pod's node to scrape
+        # the app's Prometheus endpoint every 15s. %%host%% becomes the pod IP.
+        ad.datadoghq.com/stash.checks: |
+          {
+            "openmetrics": {
+              "instances": [{
+                "openmetrics_endpoint": "http://%%host%%:8000/api/metrics",
+                "namespace": "stash",
+                "metrics": [".*"]
+              }]
+            }
+          }
+        ad.datadoghq.com/stash.logs: '[{"source": "python", "service": "stash"}]'
     spec:                # ← about the POD: which containers it runs
       containers:
         - name: stash
@@ -25,6 +48,27 @@ spec:                    # ← about the DEPLOYMENT: how many copies, which pods
             # "postgres" is the Postgres Service's name, resolved by cluster DNS.
             - name: DATABASE_URL
               value: postgresql://stash:$(POSTGRES_PASSWORD)@postgres:5432/stash
+            # --- Datadog APM ---
+            - name: DD_TRACE_ENABLED
+              value: "true"
+            # Send traces to the Agent on this pod's own node (port 8126).
+            - name: DD_AGENT_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # Read the tags from the pod labels above, so they're defined once.
+            - name: DD_ENV
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['tags.datadoghq.com/env']
+            - name: DD_SERVICE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['tags.datadoghq.com/service']
+            - name: DD_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['tags.datadoghq.com/version']
           readinessProbe:            # fails → no traffic (checks the database)
             httpGet:
               path: /readyz

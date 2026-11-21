@@ -83,3 +83,28 @@ def test_summarize_api_error(mock_groq):
 
     assert result["success"] == False
     assert "error" in result
+
+
+@patch("backend.services.groq_summarizer.tracer")
+@patch("backend.services.groq_summarizer.Groq")
+def test_summarize_records_llm_span(mock_groq, mock_tracer):
+    """Each Groq call becomes a Datadog span tagged with model and token usage."""
+    os.environ["GROQ_API_KEY"] = "test_key"
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = "Test summary"
+    mock_response.usage.prompt_tokens = 120
+    mock_response.usage.completion_tokens = 45
+    mock_groq.return_value.chat.completions.create.return_value = mock_response
+    span = mock_tracer.trace.return_value.__enter__.return_value
+
+    result = GroqSummarizer().summarize("x" * 20, max_length=10)
+
+    assert result == {"success": True, "summary": "Test summary"}
+    mock_tracer.trace.assert_called_once_with(
+        "groq.chat.completion", service="stash-groq", resource="openai/gpt-oss-120b"
+    )
+    span.set_metric.assert_any_call("llm.prompt_tokens", 120)
+    span.set_metric.assert_any_call("llm.completion_tokens", 45)
+    span.set_metric.assert_any_call("llm.transcript_chars", 20)
+    span.set_metric.assert_any_call("llm.truncated", 1)

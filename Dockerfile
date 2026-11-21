@@ -27,5 +27,10 @@ COPY pyproject.toml pytest.ini ./
 # Expose FastAPI default port
 EXPOSE 8000
 
-# Start the app with Uvicorn
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Datadog tracing is opt-in: off for plain `docker run`, switched on by the
+# Kubernetes Deployment, where an Agent runs on every node.
+ENV DD_TRACE_ENABLED=false
+
+# Start the app with Uvicorn, wrapped by ddtrace-run to auto-instrument
+# FastAPI, psycopg and outgoing HTTP calls.
+CMD ["ddtrace-run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

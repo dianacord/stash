@@ -1,0 +1,40 @@
+# Settings for the Datadog Helm chart (github.com/DataDog/helm-charts).
+# Install or update the Agent with:
+#   helm upgrade --install datadog datadog/datadog -f k8s/datadog/values.yaml
+#
+# What it creates:
+# - Agent DaemonSet: one Agent pod per node, so it can see every container
+#   on every machine (logs, metrics, traces).
+# - Cluster Agent Deployment: one pod that talks to the Kubernetes API for
+#   cluster-wide data, so every node Agent doesn't have to.
+
+datadog:
+  site: us5.datadoghq.com          # your Datadog region
+  apiKeyExistingSecret: datadog-secret   # Secret with key "api-key" (created by hand, never committed)
+  clusterName: stash-kind
+
+  # kind's kubelets use self-signed certificates; real clusters shouldn't need this.
+  kubelet:
+    tlsVerify: false
+
+  # Collect stdout/stderr of every container in the cluster.
+  logs:
+    enabled: true
+    containerCollectAll: true
+
+  # Listen for traces on port 8126 of each node. Stash sends its traces to
+  # the Agent on the same node (the node's IP is passed in as DD_AGENT_HOST).
+  apm:
+    portEnabled: true
+
+clusterAgent:
+  enabled: true
+
+agents:
+  containers:
+    traceAgent:
+      env:
+        # Drop traces for probe and metrics-scrape requests. They fire every
+        # few seconds and would bury the real user requests in APM.
+        - name: DD_APM_IGNORE_RESOURCES
+          value: "GET /healthz,GET /readyz,GET /api/metrics"

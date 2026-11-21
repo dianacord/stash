@@ -7,7 +7,7 @@ Organize saved YouTube videos with transcript extraction, AI summarization, auth
 </div>
 
 ## 1. Overview
-Stash tackles the “save for later but never revisit” problem. Users save a YouTube URL; the backend extracts the transcript, optionally summarizes it via Groq’s Llama model, and persists structured information. This assignment extends the original app by adding: automated testing & coverage gates, Docker image builds, GitHub Actions CI/CD, secret management, health/metrics endpoints, and improved code quality (SOLID + dependency injection).
+Stash tackles the “save for later but never revisit” problem. Users save a YouTube URL; the backend extracts the transcript, optionally summarizes it via Groq (`openai/gpt-oss-120b`), and persists structured information. This assignment extends the original app by adding: automated testing & coverage gates, Docker image builds, GitHub Actions CI/CD, secret management, health/metrics endpoints, and improved code quality (SOLID + dependency injection).
 
 ## 2. Repository / Folder Structure
 ```
@@ -150,7 +150,7 @@ GROQ_API_KEY=sk_groq_...
 DATABASE_URL=postgresql://stash:stash@localhost:5432/stash
 ```
 
-## 10. Monitoring Endpoints
+## 10. Monitoring & Observability
 | Endpoint | Purpose |
 |----------|---------|
 | `/api/health` | Lightweight status + whether summarizer initialized. |
@@ -163,6 +163,32 @@ Prometheus Metrics Implemented:
 - `http_request_duration_seconds{...}` – latency histogram buckets.
 - `http_errors_total{...}` – 4xx/5xx counts.
 These support alerting (error spike) & SLO evaluation (latency).
+
+### Datadog (on the kind cluster)
+The Datadog Agent runs on the cluster, installed with Helm (`k8s/datadog/values.yaml`): an Agent DaemonSet (one pod per worker node) plus the Cluster Agent.
+
+| Signal | How it gets there |
+|--------|-------------------|
+| **Logs** | The Agent collects every container's stdout/stderr; pod annotations tag them with `source` and `service`. |
+| **Metrics** | An Autodiscovery annotation on the Stash pods has the Agent scrape `/api/metrics` (Prometheus/OpenMetrics) every 15s, under the `stash.` namespace. |
+| **Traces (APM)** | The app runs under `ddtrace-run`, which traces FastAPI requests, Postgres queries and outgoing HTTP calls, and sends them to the Agent on the same node (`DD_AGENT_HOST` = node IP). Probe and scrape requests are dropped in the Agent. |
+| **LLM calls** | Each Groq call is its own span in service `stash-groq`, tagged with the model, transcript size, whether it was truncated, and prompt/completion token counts. |
+
+Logs, metrics and traces share Unified Service Tagging (`env`, `service`, `version`), set once as pod labels and passed to the app as `DD_*` variables.
+
+Install the Agent:
+```bash
+helm repo add datadog https://helm.datadoghq.com && helm repo update
+kubectl create secret generic datadog-secret \
+  --from-literal=api-key="$(grep '^DD_API_KEY=' .env | cut -d= -f2-)"   # run from the repo root
+helm upgrade --install datadog datadog/datadog -f k8s/datadog/values.yaml
+```
+
+**Measured LLM latency.** 15 back-to-back summaries of a transcript at the app's 12,000-character cap (`openai/gpt-oss-120b` on Groq's free tier, called from a pod): all 15 succeeded, median **9.1 s**, fastest 2.8 s, slowest **32.4 s**. The LLM call is almost the whole request time, so latency alerting targets that span.
+
+**Monitor.** A p95 latency monitor on the Groq span (`percentile(last_5m):p95:trace.groq.chat.completion{service:stash-groq}`), warning above 20 s and alerting above 40 s. It doesn't notify on missing data, because Groq is only called when someone saves a video. It went to WARN during the load test above:
+
+![Groq p95 latency monitor in WARN state during the load test](docs/screenshots/monitor.png)
 
 ## 11. Deployed Application
 Stash was previously deployed to Azure App Service through Azure Container Registry. That ran on a university subscription that has since ended, so the deploy workflow was removed; the Kubernetes setup in section 8 is the current way to run it.

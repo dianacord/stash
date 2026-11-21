@@ -97,9 +97,12 @@
     </div>
 
     <script>
-    const API_URL = window.location.hostname.includes("azurewebsites.net")
-        ? window.location.origin + "/api"
-        : "http://localhost:8000/api";
+    // The API serves this page, so call whatever address the page came from
+    // (localhost:8000 locally, localhost:8081 on the kind cluster). Only a page
+    // opened straight from disk (file://) has no server, so assume the local API.
+    const API_URL = window.location.protocol === "file:"
+        ? "http://localhost:8000/api"
+        : window.location.origin + "/api";
 
         function getToken() { return localStorage.getItem('stash_token'); }
         function getUsername() { return localStorage.getItem('stash_username'); }
